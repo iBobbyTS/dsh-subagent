@@ -1,0 +1,4 @@
+# Adds the configurable fast/reviewer subagent profile manager.
+- insert:
+    - id: dsh-subagent
+      name: dsh-subagent
