@@ -5,6 +5,16 @@ import test from 'node:test'
 
 const CLIENT_RUNTIME = '@deepseek-ai/dsh-client-runtime/client'
 
+/** Minimal snapshot-store double mirroring the client-runtime contract. */
+function createSnapshotStoreDouble(initial) {
+  let value = initial
+  const hook = selector => selector(value)
+  hook.update = update => update(value)
+  hook.set = next => { value = next }
+  hook.getSnapshot = () => value
+  return hook
+}
+
 /** Keep the section on the same card and control tokens as other Settings surfaces. */
 test('uses the Settings card and field visual language', async () => {
   const source = await readFile(new URL('../client.cjs', import.meta.url), 'utf8')
@@ -54,14 +64,7 @@ test('renders explicit follow and custom model and reasoning controls', async ()
   const window = { __ModuleLoader__: { load: registration => registrations.push(registration) } }
   runInNewContext(source, { window, Symbol })
 
-  function createSnapshotStore(initial) {
-    let value = initial
-    const hook = selector => selector(value)
-    hook.update = update => update(value)
-    hook.set = next => { value = next }
-    hook.getSnapshot = () => value
-    return hook
-  }
+  const createSnapshotStore = createSnapshotStoreDouble
 
   const plugin = registrations[0].factory(specifier => {
     if (specifier === 'react') return React
@@ -106,6 +109,7 @@ test('renders explicit follow and custom model and reasoning controls', async ()
   assert.equal(sectionOptions.order, 30)
   assert.equal(sectionOptions.locale, 'settings.subagent')
   assert.equal(sectionOptions.label(), '子代理')
+  assert.equal(typeof injected.saveDefault, 'function')
 
   const profiles = [{
     name: 'reviewer',
@@ -129,6 +133,10 @@ test('renders explicit follow and custom model and reasoning controls', async ()
     save: async () => {},
     remove: async () => {},
   }))
+  assert.match(markup, /默认子代理/)
+  assert.match(markup, /不设置/)
+  assert.match(markup, /reviewer · subagent_reviewer/)
+  assert.match(markup, /未指名 Profile 的子代理请求会使用这里选中的 Profile。/)
   assert.match(markup, /模型跟随当前对话/)
   assert.match(markup, /推理强度 high/)
   assert.match(markup, /编辑/)
@@ -172,6 +180,61 @@ test('renders explicit follow and custom model and reasoning controls', async ()
     injected.save(staleProfiles[0]),
     /当前自定义模型或推理强度不在实时模型目录中/,
   )
+})
+
+/** The designation rides the same settings namespace writes as profile edits. */
+test('writes and guards the default designation through the settings namespace', async () => {
+  const source = await readFile(new URL('../client.cjs', import.meta.url), 'utf8')
+  const registrations = []
+  const window = { __ModuleLoader__: { load: registration => registrations.push(registration) } }
+  runInNewContext(source, { window, Symbol })
+  const plugin = registrations[0].factory(specifier => {
+    if (specifier === 'react') return { createElement: () => ({}) }
+    if (specifier === CLIENT_RUNTIME) return { createSnapshotStore: createSnapshotStoreDouble }
+    throw new Error(`unexpected require: ${specifier}`)
+  })
+
+  let written
+  let injected
+  const ctx = {
+    connection: { api: { llm: { models: async () => ({ result: { ok: true, value: { groups: [] } } }) } } },
+    locale: { bind: () => () => '', register: () => () => {} },
+    settingsScope: {
+      bind: () => ({
+        getSnapshot: () => ({
+          status: 'ready',
+          writable: true,
+          value: {
+            profiles: [{
+              name: 'fast',
+              backend: 'spawn',
+              modelRouting: { mode: 'follow-conversation' },
+              reasoning: { mode: 'follow-conversation' },
+            }],
+            defaultProfile: 'fast',
+          },
+        }),
+        set: async (key, value) => { written = [key, value] },
+      }),
+    },
+    remote: { $on: () => () => {} },
+    on: () => () => {},
+    effect: callback => callback(),
+    slots: {
+      inject: (name, callback) => callback(),
+      register: (options, registered) => {
+        injected = options.inject()
+        return () => {}
+      },
+    },
+  }
+  plugin.apply(ctx)
+
+  await injected.saveDefault(undefined)
+  assert.deepEqual(written, ['defaultProfile', undefined])
+  await injected.saveDefault('fast')
+  assert.deepEqual(written, ['defaultProfile', 'fast'])
+  await assert.rejects(injected.remove('fast'), /默认子代理/)
 })
 
 /** Evaluate the shipped classic bundle against the ModuleLoader handoff. */

@@ -1,6 +1,6 @@
 {
   "name": "dsh-subagent",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Named subagent profiles with configurable model routing and reasoning for DeepSeek Harness",
   "keywords": [
     "dsh-plugin",

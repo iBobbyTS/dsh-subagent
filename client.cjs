@@ -343,7 +343,23 @@ function NewProfileCard({ catalog, writable, save, cancel, setError }) {
       e('button', { type: 'button', className: 'dsh-subagents__button dsh-subagents__button--primary', disabled: busy || !writable || !draftValid(draft, catalog), onClick: commit }, '添加')))
 }
 
-function SubagentSettings({ useSettings, useCatalog, save, remove }) {
+function DefaultProfileField({ profiles, value, writable, onChange }) {
+  return e('div', { className: 'dsh-subagents__field' },
+    e('span', { className: 'dsh-subagents__label' }, '默认子代理'),
+    e('select', {
+      className: 'dsh-subagents__control',
+      value: value ?? '',
+      disabled: !writable,
+      onChange: event => onChange(event.target.value === '' ? undefined : event.target.value),
+    },
+    e('option', { value: '' }, '不设置'),
+    ...profiles.map(profile => e('option', { key: profile.name, value: profile.name },
+      `${profile.name} · subagent_${profile.name}`))),
+    e('span', { className: 'dsh-subagents__secondary' },
+      '未指名 Profile 的子代理请求会使用这里选中的 Profile。'))
+}
+
+function SubagentSettings({ useSettings, useCatalog, save, remove, saveDefault }) {
   const settings = useSettings(value => value)
   const catalogState = useCatalog(value => value)
   const [error, setError] = React.useState('')
@@ -355,6 +371,17 @@ function SubagentSettings({ useSettings, useCatalog, save, remove }) {
   }
   const profiles = Array.isArray(settings.value?.profiles) ? settings.value.profiles : []
   const catalog = Array.isArray(catalogState.groups) ? catalogState.groups : []
+  const currentDefault = typeof settings.value?.defaultProfile === 'string'
+    ? settings.value.defaultProfile
+    : undefined
+
+  async function changeDefault(value) {
+    try {
+      await saveDefault(value)
+    } catch (changeError) {
+      setError(messageOf(changeError))
+    }
+  }
   return e('section', { className: 'dsh-subagents', 'aria-labelledby': 'dsh-subagents-title' },
     e('style', null, STYLE),
     e('div', { className: 'dsh-subagents__heading' },
@@ -370,6 +397,12 @@ function SubagentSettings({ useSettings, useCatalog, save, remove }) {
       }, '新建子代理')),
     catalogState.error ? e('div', { className: 'dsh-subagents__error' }, catalogState.error) : null,
     error ? e('div', { className: 'dsh-subagents__error' }, error) : null,
+    e(DefaultProfileField, {
+      profiles,
+      value: currentDefault,
+      writable: settings.writable,
+      onChange: changeDefault,
+    }),
     e('div', { className: 'dsh-subagents__list' },
       adding ? e(NewProfileCard, {
         catalog,
@@ -438,7 +471,17 @@ function apply(ctx) {
     if (snapshot.status !== 'ready' || !snapshot.writable) throw new Error('dsh-subagent settings are read-only')
     const current = profileList(snapshot)
     if (!current.some(item => item.name === nameToRemove)) throw new Error(`profile "${nameToRemove}" does not exist`)
+    // Mirrors the model tool contract: a dangling default would fail validation.
+    if (snapshot.value?.defaultProfile === nameToRemove) {
+      throw new Error('该 Profile 是当前默认子代理，请先在“默认子代理”中选择其他选项后再删除。')
+    }
     await settings.set('profiles', current.filter(item => item.name !== nameToRemove))
+  }
+
+  async function saveDefault(nextDefault) {
+    const snapshot = settings.getSnapshot()
+    if (snapshot.status !== 'ready' || !snapshot.writable) throw new Error('dsh-subagent settings are read-only')
+    await settings.set('defaultProfile', nextDefault)
   }
 
   ctx.effect(() => {
@@ -470,6 +513,7 @@ function apply(ctx) {
     inject: () => ({
       save,
       remove,
+      saveDefault,
       hooks: { settings, catalog },
     }),
   }, SubagentSettings))

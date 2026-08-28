@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { Config } from '../index.js'
+import { assertProfiles, Config } from '../index.js'
 
 test('defaults declare follow-conversation routing and explicit effort policies', () => {
   const config = Config({})
@@ -62,6 +62,25 @@ test('rejects partial custom routing and reasoning policies', () => {
       reasoning: { mode: 'custom' },
     }],
   }))
+})
+
+test('default profile designation validates against live profile names', () => {
+  assert.equal(Config({}).defaultProfile, undefined)
+
+  const profiles = [{
+    name: 'fast',
+    modelRouting: { mode: 'follow-conversation' },
+    reasoning: { mode: 'follow-conversation' },
+  }]
+  const designated = Config({ profiles, defaultProfile: 'fast' })
+  assert.equal(designated.defaultProfile, 'fast')
+
+  assert.doesNotThrow(() => assertProfiles({ profiles, defaultProfile: 'fast' }))
+  assert.throws(
+    () => assertProfiles({ profiles, defaultProfile: 'ghost' }),
+    /defaultProfile "ghost" does not match any profile/,
+  )
+  assert.throws(() => Config({ profiles, defaultProfile: 'Bad Name' }))
 })
 
 test('rejects legacy flat routing settings', () => {

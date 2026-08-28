@@ -70,6 +70,8 @@ const profileSchema = z.object({
 
 export const Config = z.object({
   profiles: z.array(profileSchema).default(DEFAULT_PROFILES),
+  // Omission IS the cleared state; an empty string never passes PROFILE_NAME.
+  defaultProfile: z.string().pattern(PROFILE_NAME).default(undefined),
 })
 
 const PROFILE_KEYS = new Set([
@@ -84,7 +86,7 @@ function assertKnownKeys(value, allowed, path) {
   if (unknown !== undefined) throw new Error(`dsh-subagent: ${path} has unknown field "${unknown}"`)
 }
 
-function assertProfiles(value) {
+export function assertProfiles(value) {
   if (!Array.isArray(value?.profiles)) throw new Error('dsh-subagent: profiles must be an array')
   const seen = new Set()
   for (const profile of value.profiles) {
@@ -105,6 +107,10 @@ function assertProfiles(value) {
       && (profile.toolFilter.deny?.length ?? 0) === 0) {
       throw new Error(`dsh-subagent: profile "${profile.name}" has an empty toolFilter`)
     }
+  }
+  if (value.defaultProfile !== undefined
+    && !value.profiles.some(profile => profile.name === value.defaultProfile)) {
+    throw new Error(`dsh-subagent: defaultProfile "${value.defaultProfile}" does not match any profile`)
   }
 }
 
@@ -159,15 +165,38 @@ function copyProfileFields(args) {
   return profile
 }
 
+/** Order: directly after tool-subagent's own delegation-policy sections (116.5). */
+const DEFAULT_SECTION_ORDER = 116.55
+
+/**
+ * Model-visible steering for the default profile. Empty while unset or while
+ * that profile's delegation tool is not mounted: naming an absent tool would
+ * steer unnamed requests into a guaranteed failure.
+ */
+function defaultSectionText(value, fibers) {
+  const name = value?.defaultProfile
+  if (typeof name !== 'string' || !fibers.has(name)) return ''
+  const profile = (Array.isArray(value?.profiles) ? value.profiles : [])
+    .find(candidate => candidate.name === name)
+  const description = typeof profile?.description === 'string' && profile.description.length > 0
+    ? ' — ' + profile.description
+    : ''
+  return 'Named subagent profiles are available as `subagent_<name>` tools.'
+    + ' The default profile is ' + name + ' (`subagent_' + name + '`' + description + ').'
+    + ' When a request delegates work to a subagent without naming one, use `subagent_' + name + '`'
+    + ' unless another profile clearly fits better.'
+}
+
 function managementTool(scope) {
   return defineTool({
     name: 'custom_subagent',
-    description: 'Manage named subagent profiles. Each profile exposes a separate subagent_<name> tool.',
+    description: 'Manage named subagent profiles. Each profile exposes a separate subagent_<name> tool;'
+      + ' set-default marks which one handles delegation requests that name no profile.',
     parameters: {
       action: {
         type: 'string',
         required: true,
-        enum: ['list', 'add', 'update', 'remove', 'reload'],
+        enum: ['list', 'add', 'update', 'remove', 'reload', 'set-default'],
       },
       name: { type: 'string' },
       description: { type: 'string' },
@@ -197,14 +226,36 @@ function managementTool(scope) {
     async execute(args) {
       const current = scope.get()
       if (args.action === 'list' || args.action === 'reload') {
-        return { ok: true, profiles: current.profiles.map(publicProfile) }
+        return { ok: true, defaultProfile: current.defaultProfile, profiles: current.profiles.map(publicProfile) }
+      }
+      if (args.action === 'set-default') {
+        // An absent name clears the designation; a present one must name a live profile.
+        if (args.name !== undefined && !PROFILE_NAME.test(args.name)) {
+          throw new Error(`profile name must match ${String(PROFILE_NAME)}`)
+        }
+        if (args.name !== undefined && !current.profiles.some(profile => profile.name === args.name)) {
+          return { ok: false, error: `profile "${String(args.name)}" does not exist` }
+        }
+        await scope.update({ defaultProfile: args.name })
+        return { ok: true, defaultProfile: scope.get().defaultProfile, profiles: scope.get().profiles.map(publicProfile) }
       }
       if (args.action === 'remove') {
         if (typeof args.name !== 'string' || !current.profiles.some(profile => profile.name === args.name)) {
           return { ok: false, error: `profile "${String(args.name)}" does not exist` }
         }
+        if (current.defaultProfile === args.name) {
+          return {
+            ok: false,
+            error: `profile "${args.name}" is the default subagent; choose another default first`
+              + ' (set-default without "name" clears it)',
+          }
+        }
         await scope.update({ profiles: current.profiles.filter(profile => profile.name !== args.name) })
-        return { ok: true, profiles: scope.get().profiles.map(publicProfile) }
+        return {
+          ok: true,
+          defaultProfile: scope.get().defaultProfile,
+          profiles: scope.get().profiles.map(publicProfile),
+        }
       }
       if (args.action !== 'add' && args.action !== 'update') {
         throw new Error(`unknown action "${String(args.action)}"`)
@@ -288,9 +339,15 @@ export function apply(ctx, config) {
     const cleanup = agent.ctx.effect(() => {
       const managementFiber = agent.ctx.plugin({
         name: 'dsh-subagent-management',
-        inject: ['tools'],
+        inject: ['tools', 'systemPrompt'],
         apply(agentCtx) {
           agentCtx.tools.register(managementTool(scope))
+          // Reads live scope state on every prompt render; disposal rides the fiber.
+          agentCtx.systemPrompt.section({
+            name: 'dsh-subagent:default-profile',
+            order: DEFAULT_SECTION_ORDER,
+            text: () => defaultSectionText(scope.get(), fibers),
+          })
         },
       })
       void enqueue(scope.get())

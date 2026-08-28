@@ -5,6 +5,15 @@ import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import test from 'node:test'
 
+/** Reconcile runs on an async tail; give mounted-state predicates a bounded window. */
+async function waitFor(predicate) {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    if (predicate()) return
+    await new Promise(resolve => setTimeout(resolve, 5))
+  }
+  assert.ok(predicate(), 'condition did not hold within the wait window')
+}
+
 function fakeProvider(name, inheritsParentContext, continuable) {
   return {
     name,
@@ -68,13 +77,20 @@ function fixturePlugin(createScope) {
         fork: fakeProvider('fork', true, false),
       }
       const subagents = { getProvider: name => providers[name] }
-      const systemPrompt = { section: () => () => {}, tools: () => () => {} }
+      const sections = []
+      const systemPrompt = {
+        section: spec => {
+          sections.push(spec)
+          return () => {}
+        },
+        tools: () => () => {},
+      }
       const agents = { roots: () => [agent] }
       ctx.provide('settings', settings)
       ctx.provide('agents', agents)
       ctx.provide('subagents', subagents)
       ctx.provide('systemPrompt', systemPrompt)
-      globalThis.__dshSubagentComposition = { agent }
+      globalThis.__dshSubagentComposition = { agent, sections }
     },
   }
 }
@@ -139,6 +155,36 @@ test('loads the bundle through a real cordis.yml and disposes Agent-scoped tools
       reasoning: { mode: 'follow-conversation' },
     })
     observed.tools = tools
+
+    // Default-profile designation: management contract plus prompt steering.
+    const section = observed.sections.find(item => item.name === 'dsh-subagent:default-profile')
+    assert.ok(section)
+    assert.equal(section.text({}), '')
+    const listed = await management.execute({ action: 'list' }, {})
+    assert.equal(listed.defaultProfile, undefined)
+
+    const chosen = await management.execute({ action: 'set-default', name: 'fast' }, {})
+    assert.equal(chosen.ok, true)
+    assert.equal(chosen.defaultProfile, 'fast')
+    await waitFor(() => section.text({}) !== '')
+    assert.match(section.text({}), /The default profile is fast \(\`subagent_fast\`/)
+    assert.match(section.text({}), /use \`subagent_fast\`/)
+
+    const ghost = await management.execute({ action: 'set-default', name: 'ghost' }, {})
+    assert.equal(ghost.ok, false)
+    await assert.rejects(
+      management.execute({ action: 'set-default', name: 'BAD NAME' }, {}),
+      /profile name must match/,
+    )
+
+    const guarded = await management.execute({ action: 'remove', name: 'fast' }, {})
+    assert.equal(guarded.ok, false)
+    assert.match(guarded.error, /is the default subagent/)
+
+    const cleared = await management.execute({ action: 'set-default' }, {})
+    assert.equal(cleared.ok, true)
+    assert.equal(cleared.defaultProfile, undefined)
+    assert.equal(section.text({}), '')
   } finally {
     delete globalThis.__dshSubagentComposition
     await context.fiber.dispose()
