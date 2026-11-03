@@ -126,7 +126,8 @@ export function apply(ctx) {
     const slot = { revision: 0, state: { profiles: new Map(), diagnostics: new Map() } };
     const disposers = [];
     try {
-      // Exact Agent scope shadows the native subagent tool registered by standard/PTC presets.
+      // The bundle keeps native spawn in the preset ancestor layer; same-layer
+      // registrations cannot shadow one another (modelSelectionSettings must be off).
       disposers.push(agent.ctx.tools.register(profileTool({ ctx, load, pending })));
       disposers.push(agent.ctx.systemPrompt.section({
         name: 'dsh-subagent:profiles',

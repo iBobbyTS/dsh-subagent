@@ -2,7 +2,7 @@
 
 本 fork 将旧版「每个 Profile 一个 `subagent_<name>` 工具」改为 **一个名为 `subagent` 的工具，调用时必须填写 `profile`**。启动、完成通知、继续会话、深度限制、生命周期都使用 DSH 官方 `ctx.subagents.startActivation()`，工具访问限制使用官方 `agent.ctx.tools.restrict()`。
 
-> 适配目标：DSH 0.2.1-rc.1 及更新的 0.2.x。已完成单元测试与模拟集成测试，但尚未在真实 DSH Desktop 上验证。原 Settings 图形 Profile 编辑器不再提供，配置改为 TOML。
+> API 适配目标：DSH 0.2.1-rc.1 及更新的 0.2.x。预设覆盖基于 0.2.1-rc.2，已在该版本真实 Web profile 的 standard、ptc、cordis 预设验证注册、停用恢复与重新启用；其他 DSH 版本的预设需重新生成并验证，Desktop 和真实模型子任务完成流程尚未验证。原 Settings 图形 Profile 编辑器不再提供，配置改为 TOML。
 
 ## 安装／卸载：只使用官方入口
 
@@ -23,7 +23,11 @@ Desktop 必须先启动过一次以建立 `desktop` Profile，再完全退出 De
 
 Windows Desktop 的相对路径是 `resources\\runtime\\cli\\bin\\dsh.cmd`，位于**实际应用安装目录内**（安装目录可自定义）。桌面应用也有 **Manage dsh Command...** 功能，可将自己的 CLI 加入 PATH。不能用另外安装的 npm `dsh` 修改 Desktop 专属 Profile。
 
-启用插件时，只在根 Agent 作用域中注册同名 `subagent` 来遮蔽官方工具；卸载后自动回退官方 `subagent`。**不修改**官方的 `subagent_fork`、`send_message`、`list_agents`、`interrupt_agent`、模型发现及 workflow 工具。没有独立安装器、编译步骤或自定义生命周期服务。
+启用插件时，在根 Agent 作用域中注册同名 `subagent`，仅替换 spawn 入口。Bundle 携带从 DSH `0.2.1-rc.2` 生成的 `standard`、`ptc`、`cordis` 官方预设覆盖，仅将原生 spawn 工具的 `modelSelectionSettings` 设为 `false`：固定 TOML Profile 接管模型选择，原生 fallback 留在预设祖先层，避免两个同名工具在 Agent 自身层重复注册。**不修改**原生 spawn/fork 后端、生命周期管理、`subagent_fork`、`send_message`、`list_agents`、`interrupt_agent` 或 workflow 工具。原生 spawn 的可选模型选择及其关联的模型发现不再用于此入口；LLM Provider 本身不受影响。
+
+预设补丁对**新建或重新打开的会话**生效，已经运行的会话保留旧预设修订；安装或升级后请重启 Web/应用再验证。停用 Host 插件恢复原生基础 `subagent`；停用或卸载整个 bundle 后，新会话恢复完整官方预设。没有独立安装器、编译步骤或自定义生命周期服务。
+
+组合范围是上述三个内置预设，`minimal` 不变。Profile/用户层的同名预设覆盖优先级更高；自定义预设应同样关闭其原生 spawn 的 `modelSelectionSettings`，否则仍会同层冲突。其他 bundle 对这些内置预设的较低优先级定制不会被合并。
 
 ## TOML 配置
 
@@ -52,6 +56,13 @@ tool_whitelist = ["read", "glob", "grep"]
 
 支持字段：`provider`、`model`、`reasoning_effort`、`tool_whitelist`、`tool_blacklist`、`skill_whitelist`、`skill_blacklist`、`description`、`developer_instruction`。其中仅前三个必填。`provider` 是 LLM Provider ID，**不是** Subagent 执行后端 `spawn`。文件名（去掉 `.toml`）即 Profile ID，允许小写字母开头及后续小写字母、数字、下划线与连字符。
 
+### 受保护的基础工具
+
+- `send_message` 自动加入子 Agent 的有效白名单，即使白名单为空或没有写它；不会改写 TOML 配置或 Profile 指纹。父／子运行环境若没有原生 `send_message`，以 `REQUIRED_TOOL_UNAVAILABLE` 拒绝启动，不注册替代实现。
+- `send_message`、`structured_output` 均不能出现在 `tool_blacklist`。任意一个被拉黑，Profile 显示 `PROTECTED_TOOL_BLACKLIST` 错误，且在模型路由预检和原生 spawn 之前拒绝启动；同时写入 whitelist 也不能抵消此错误。
+- `structured_output` 继续由原生运行时在结构化任务中按需注入到子 Agent 自身作用域，不受继承工具白名单过滤。不需要在 whitelist 写它；写了也不会强制注入，且不会因父 Agent 中尚不存在而报未知工具。插件不重复注册该工具，当前 Profile spawn 接口不新增 `outputSchema`／`output_schema` 参数。
+- 空白名单的含义是：只保留继承的 `send_message`，以及原生运行时按需注册的子作用域工具；不再表示完全无工具。
+
 `description` 只会出现在主 Agent 的 Profile 列表中，便于主 Agent 选择角色；`developer_instruction` 作为子 Agent 的 Persona 前缀注入，不在工具入参、主 Agent 的角色列表中展示。需要说明：这不是 API 意义上的独立 `developer` 消息，而且如果主 Agent 有直接读取 TOML 文件的系统权限，该配置并不构成保密边界。
 
 ## 调用
@@ -76,7 +87,9 @@ subagent({
 - `PROVIDER_NOT_FOUND`：DSH 未注册指定 Provider。
 - `MODEL_NOT_FOUND`：模型适配器明确报告不存在；其他不确定错误归为 `MODEL_UNVERIFIED`，不误判。
 - `REASONING_EFFORT_UNAVAILABLE`：模型不支持指定推理档位。
-- `TOOL_NOT_FOUND`：工具白名单或黑名单中存在不可用名称。
+- `TOOL_NOT_FOUND`：工具白名单或黑名单中存在不可用名称（whitelist 中的按需 `structured_output` 除外）。
+- `PROTECTED_TOOL_BLACKLIST`：黑名单包含 `send_message` 或 `structured_output`，Profile 无效并阻止 spawn。
+- `REQUIRED_TOOL_UNAVAILABLE`：父／子作用域中缺少原生 `send_message`，无法保证通信能力。
 - `UNSUPPORTED_SKILL_FILTER`：非空 Skill 黑白名单无法通过官方 API 完整执行，因此拒绝该 Profile。
 - `PROFILE_CHANGED`：冷恢复时 TOML 与启动时持久化的 Profile 指纹不一致，拒绝不安全恢复。
 

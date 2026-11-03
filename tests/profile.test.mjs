@@ -38,9 +38,33 @@ test('nonempty skill policies fail closed; empty arrays remain parseable', () =>
 });
 
 test('tool names are validated without inventing tools', () => {
-  assertToolNames(profile(), ['read', 'glob', 'grep', 'subagent']);
-  rejectsCode(() => assertToolNames(profile(), ['read']), 'TOOL_NOT_FOUND');
-  assertToolNames(validateProfile('explorer', { ...valid, tool_whitelist: [] }), ['read']);
+  assertToolNames(profile(), ['read', 'glob', 'grep', 'subagent', 'send_message']);
+  rejectsCode(() => assertToolNames(profile(), ['read', 'send_message']), 'TOOL_NOT_FOUND');
+  assertToolNames(validateProfile('explorer', { ...valid, tool_whitelist: [] }), ['read', 'send_message']);
+});
+
+test('protected tools in blacklist invalidate profiles even when absent or allowed in whitelist', () => {
+  for (const tool of ['send_message', 'structured_output']) {
+    for (const tool_whitelist of [undefined, [], [tool]]) {
+      const input = { ...valid, tool_whitelist, tool_blacklist: [tool] };
+      assert.throws(() => validateProfile('explorer', input), error =>
+        error.code === 'PROTECTED_TOOL_BLACKLIST' && error.message.includes(tool));
+      rejectsCode(() => assertToolNames({ name: 'raw', ...input }, []), 'PROTECTED_TOOL_BLACKLIST');
+    }
+  }
+});
+
+test('native messaging must be available even for profiles without filters', () => {
+  const plain = validateProfile('plain', { provider: valid.provider, model: valid.model, reasoning_effort: valid.reasoning_effort });
+  rejectsCode(() => assertToolNames(plain, ['read']), 'REQUIRED_TOOL_UNAVAILABLE');
+  assertToolNames(plain, ['send_message']);
+});
+
+test('structured output whitelist is optional runtime-owned capability, not an unknown parent tool', () => {
+  const p = validateProfile('structured', { ...valid, tool_whitelist: ['structured_output'] });
+  assertToolNames(p, ['send_message']);
+  assertToolNames(p, ['send_message', 'structured_output']);
+  rejectsCode(() => assertToolNames(validateProfile('typo', { ...valid, tool_whitelist: ['structured_ouput'] }), ['send_message']), 'TOOL_NOT_FOUND');
 });
 
 test('profile label permits resume, is stable and does not leak developer instruction', () => {

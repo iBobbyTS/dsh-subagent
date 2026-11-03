@@ -8,6 +8,13 @@ export const PROFILE_FIELDS = new Set([
 ]);
 const REQUIRED = ['provider', 'model', 'reasoning_effort'];
 const LISTS = ['tool_whitelist', 'tool_blacklist', 'skill_whitelist', 'skill_blacklist'];
+const PROTECTED_TOOLS = ['send_message', 'structured_output'];
+
+function assertProtectedToolBlacklist(profile) {
+  const blocked = profile.tool_blacklist?.filter(name => PROTECTED_TOOLS.includes(name)) ?? [];
+  if (blocked.length) throw new ProfileError('PROTECTED_TOOL_BLACKLIST',
+    `profile "${profile.name}" cannot blacklist protected tools: ${blocked.join(', ')}`);
+}
 const LABEL_RE = /^\[dsh-profile:([a-z][a-z0-9_-]{0,63}):([a-f0-9]{16})\](?:\s|$)/;
 
 export class ProfileError extends Error {
@@ -60,6 +67,7 @@ export function validateProfile(name, value) {
     const v = assertList(value[field], field, name);
     if (v !== undefined) profile[field] = v;
   }
+  assertProtectedToolBlacklist(profile);
   // No partial enforcement: the Skill registry currently has no agent-scoped allow/deny API.
   for (const field of ['skill_whitelist', 'skill_blacklist']) {
     if (profile[field]?.length) throw new ProfileError('UNSUPPORTED_SKILL_FILTER',
@@ -88,10 +96,16 @@ export function parseProfileLabel(label) {
 }
 
 export function assertToolNames(profile, names) {
+  assertProtectedToolBlacklist(profile);
   const known = new Set(names);
+  if (!known.has('send_message')) throw new ProfileError('REQUIRED_TOOL_UNAVAILABLE',
+    `profile "${profile.name}" requires the native send_message tool`);
   for (const key of ['tool_whitelist', 'tool_blacklist']) {
     if (profile[key] === undefined) continue;
-    const missing = profile[key].filter(name => !known.has(name));
+    // Native structured_output is child-local and only exists for structured
+    // tasks. Naming it in a whitelist neither requires nor injects it here.
+    const missing = profile[key].filter(name => !known.has(name)
+      && !(key === 'tool_whitelist' && name === 'structured_output'));
     if (missing.length) throw new ProfileError('TOOL_NOT_FOUND',
       `profile "${profile.name}" has unknown ${key} entries: ${missing.map(x => JSON.stringify(x)).join(', ')}`);
   }

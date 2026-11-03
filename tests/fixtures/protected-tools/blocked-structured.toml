@@ -1,0 +1,4 @@
+provider = "openai-codex"
+model = "gpt-6-luna"
+reasoning_effort = "xhigh"
+tool_blacklist = ["structured_output"]

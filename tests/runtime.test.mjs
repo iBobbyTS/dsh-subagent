@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { validateProfile, ProfileError, parseProfileLabel } from '../profile-core.js';
 import { spawnProfiled, resolveChildProfile, installChildPolicy, profileIdentityFromSession } from '../profile-runtime.js';
+import { scanProfiles } from '../profile-store.js';
+import { fileURLToPath } from 'node:url';
 
 const p = validateProfile('explorer', {
   provider: 'openai-codex', model: 'gpt-6-luna', reasoning_effort: 'xhigh',
@@ -12,8 +14,8 @@ const p = validateProfile('explorer', {
 const load = () => ({ profiles: new Map([['explorer', p]]), diagnostics: new Map() });
 const signal = new AbortController().signal;
 const fakeTools = () => ({
-  schemas: () => [{ name: 'read' }, { name: 'grep' }, { name: 'edit' }, { name: 'subagent' }],
-  restrict: (filter) => { assert.deepEqual(filter.allow, ['read', 'grep']); fakeTools.restricted = true; },
+  schemas: () => [{ name: 'read' }, { name: 'grep' }, { name: 'edit' }, { name: 'subagent' }, { name: 'send_message' }],
+  restrict: (filter) => { assert.deepEqual(filter.allow, ['read', 'grep', 'send_message']); fakeTools.restricted = true; },
 });
 const agent = { ctx: { tools: fakeTools(), systemPrompt: {
   getSectionOrder: () => 100,
@@ -85,14 +87,72 @@ test('child descriptor permits cold resume and refuses drifted Profile', () => {
 
 test('child instructions are scoped to child, not the main-agent schema', () => {
   const child = { ctx: {
-    tools: { schemas: () => [{ name: 'read' }, { name: 'grep' }, { name: 'edit' }],
+    tools: { schemas: () => [{ name: 'read' }, { name: 'grep' }, { name: 'edit' }, { name: 'send_message' }],
       restrict: (filter) => { child.filter = filter; } },
     systemPrompt: { getSectionOrder: () => 110, section: (definition) => { child.persona = definition; } },
   } };
   installChildPolicy(child, p);
   assert.equal(child.persona.name, 'deployment:persona-prefix');
   assert.equal(child.persona.text, p.developer_instruction);
-  assert.deepEqual(child.filter.allow, ['read', 'grep']);
+  assert.deepEqual(child.filter.allow, ['read', 'grep', 'send_message']);
+  assert.deepEqual(p.tool_whitelist, ['read', 'grep'], 'effective protection must not mutate persisted profile identity');
+});
+
+test('whitelist protection preserves messaging without registering structured output eagerly', () => {
+  for (const tool_whitelist of [[], ['read'], ['send_message'], ['structured_output']]) {
+    for (const hasStructuredOutput of [false, true]) {
+      const profile = validateProfile('protected', { provider: p.provider, model: p.model,
+        reasoning_effort: p.reasoning_effort, tool_whitelist });
+      const child = { ctx: { tools: {
+        schemas: () => ['read', 'send_message', ...(hasStructuredOutput ? ['structured_output'] : [])].map(name => ({ name })),
+        restrict: filter => { child.filter = filter; },
+        register: () => assert.fail('the native runtime, not this policy, owns structured_output injection'),
+      } } };
+      installChildPolicy(child, profile);
+      assert.deepEqual(child.filter.allow, [...new Set([...tool_whitelist.filter(n => n !== 'structured_output'), 'send_message'])]);
+      assert.equal(child.filter.allow.includes('structured_output'), false, 'scope-local tools must not enter inherited restrictions');
+    }
+  }
+});
+
+test('blacklist-only policy leaves messaging intact and never broadens other permissions', () => {
+  const profile = validateProfile('denyedit', { provider: p.provider, model: p.model,
+    reasoning_effort: p.reasoning_effort, tool_blacklist: ['edit'] });
+  const child = { ctx: { tools: {
+    schemas: () => ['send_message', 'edit'].map(name => ({ name })),
+    restrict: filter => { child.filter = filter; },
+  } } };
+  installChildPolicy(child, profile);
+  assert.deepEqual(child.filter, { deny: ['edit'] });
+});
+
+test('missing messaging in child view fails closed even without profile filters', () => {
+  const profile = validateProfile('plain', { provider: p.provider, model: p.model, reasoning_effort: p.reasoning_effort });
+  const child = { ctx: { tools: { schemas: () => [{ name: 'read' }] } } };
+  assert.throws(() => installChildPolicy(child, profile), error => error.code === 'REQUIRED_TOOL_UNAVAILABLE');
+});
+
+test('blacklisted protected tools appear as scan diagnostics and never reach model preflight or native spawn', async () => {
+  const directory = fileURLToPath(new URL('./fixtures/protected-tools/', import.meta.url));
+  const scanned = scanProfiles(directory);
+  assert.deepEqual([...scanned.profiles.keys()], ['reader']);
+  for (const name of ['blocked-message', 'blocked-structured']) {
+    const error = scanned.diagnostics.get(name);
+    assert.equal(error.code, 'PROTECTED_TOOL_BLACKLIST');
+    const ctx = { llm: { listProviders: () => assert.fail('invalid profile reached route preflight') },
+      subagents: { startActivation: () => assert.fail('invalid profile reached native spawn') } };
+    const pending = new Map();
+    await assert.rejects(() => spawnProfiled({ ctx, agent, args: { profile: name, prompt: 'work' },
+      load: () => scanned, pending, signal }), caught => caught === error);
+    assert.equal(pending.size, 0);
+  }
+});
+
+test('missing messaging in parent view blocks spawn before backend activation', async () => {
+  const parent = { ctx: { tools: { schemas: () => [{ name: 'read' }, { name: 'grep' }] } } };
+  const ctx = baseContext({ subagents: { startActivation: () => assert.fail('missing communication must block spawn') } });
+  await assert.rejects(() => spawnProfiled({ ctx, agent: parent, args: { profile: 'explorer', prompt: 'work' },
+    load, pending: new Map(), signal }), error => error.code === 'REQUIRED_TOOL_UNAVAILABLE');
 });
 
 test('unknown or malformed profile errors are returned to caller, not silently substituted', async () => {

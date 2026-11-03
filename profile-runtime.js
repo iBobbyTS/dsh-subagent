@@ -12,13 +12,20 @@ export function profileIdentityFromSession(session) {
 
 export function installChildPolicy(agent, profile) {
   const child = agent.ctx;
-  // DSH tools.restrict enforces visibility, resolution and execution on this scope.
+  // Recheck the child view: inherited restrictions must not silently remove
+  // the native communication tool, even when this profile sets no filters.
+  const names = child.tools.schemas(agent).map(tool => tool.name);
+  assertToolNames(profile, names);
+  // DSH tools.restrict filters inherited tools, not child-local runtime tools.
+  // Native structured_output is injected only for structured tasks and is
+  // exempt whether it is attached before or after this restriction. Never
+  // name that scope-local (or not-yet-created) tool in the inherited allow list.
   const hasFilters = profile.tool_whitelist !== undefined || profile.tool_blacklist !== undefined;
   if (hasFilters) {
-    const names = child.tools.schemas(agent).map(tool => tool.name);
-    assertToolNames(profile, names);
     child.tools.restrict({
-      ...(profile.tool_whitelist === undefined ? {} : { allow: profile.tool_whitelist }),
+      ...(profile.tool_whitelist === undefined ? {} : { allow: [...new Set([
+        ...profile.tool_whitelist.filter(name => name !== 'structured_output'), 'send_message',
+      ])] }),
       ...(profile.tool_blacklist === undefined ? {} : { deny: profile.tool_blacklist }),
     });
   }
