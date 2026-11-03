@@ -8,7 +8,7 @@ import { defineTool } from '@deepseek-ai/dsh-tools';
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths';
 import { ProfileError, assertModelRoute, assertToolNames } from './profile-core.js';
 import { ensureProfileDirectory, scanProfiles } from './profile-store.js';
-import { installChildPolicy, resolveChildProfile, spawnProfiled } from './profile-runtime.js';
+import { installChildPolicy, installRootRouting, parentToolNames, resolveChildProfile, spawnProfiled } from './profile-runtime.js';
 
 export const name = 'dsh-subagent';
 export const inject = ['agents', 'subagents', 'tools', 'systemPrompt', 'llm'];
@@ -66,7 +66,7 @@ export function profileTool({ ctx, load, pending }) {
 export async function validatedCatalog(ctx, agent, load, signal) {
   const { profiles: parsed, diagnostics } = load();
   const profiles = new Map();
-  const toolNames = ctx.tools.schemas(agent).map(tool => tool.name);
+  const toolNames = parentToolNames(agent);
   for (const [name, profile] of parsed) {
     try {
       assertToolNames(profile, toolNames);
@@ -126,9 +126,9 @@ export function apply(ctx) {
     const slot = { revision: 0, state: { profiles: new Map(), diagnostics: new Map() } };
     const disposers = [];
     try {
-      // The bundle keeps native spawn in the preset ancestor layer; same-layer
-      // registrations cannot shadow one another (modelSelectionSettings must be off).
-      disposers.push(agent.ctx.tools.register(profileTool({ ctx, load, pending })));
+      // Current DSH presets own shared native definitions. Shadow only this
+      // root Agent's spawn entry and filter its inherited fork, never the preset.
+      disposers.push(installRootRouting(agent, profileTool({ ctx, load, pending })));
       disposers.push(agent.ctx.systemPrompt.section({
         name: 'dsh-subagent:profiles',
         order: (agent.ctx.systemPrompt.getSectionOrder('TOOL_SUBAGENT') ?? 116) + 0.1,
@@ -151,6 +151,17 @@ export function apply(ctx) {
     slot.dispose();
   };
 
+  // Own cross-context registrations before touching existing Agents, so a
+  // later attachment failure also unwinds earlier successful attachments.
+  ctx.effect(() => () => {
+    unloading = true;
+    watcher?.close();
+    if (refreshTimer !== undefined) clearTimeout(refreshTimer);
+    for (const agent of [...roots.keys()]) detachRoot(agent);
+    pending.clear();
+    // Child policies remain child-owned; unload must not widen their permissions.
+  }, 'dsh-subagent:root-scoped-router');
+
   const attachChild = (agent) => {
     if (agent[CHILD_POLICY_MARKER]) return;
     const profile = resolveChildProfile(agent.session, pending, load);
@@ -169,6 +180,7 @@ export function apply(ctx) {
     }
   });
   ctx.on('agent/disposed', ({ agent }) => { detachRoot(agent); });
+  ctx.on('tools/change', scheduleRefresh);
   ctx.on('llm/adapters-updated', scheduleRefresh);
   ctx.on('llm/models-updated', scheduleRefresh);
 
@@ -184,14 +196,4 @@ export function apply(ctx) {
   } catch (error) {
     ctx.logger.warn(`dsh-subagent: unable to watch ${directory}: ${error.message}; new profile changes are still read at spawn time`);
   }
-
-  ctx.effect(() => () => {
-    unloading = true;
-    watcher?.close();
-    if (refreshTimer !== undefined) clearTimeout(refreshTimer);
-    for (const agent of [...roots.keys()]) detachRoot(agent);
-    pending.clear();
-    // Child-scoped policies remain owned by each child Agent until its own disposal;
-    // unloading the router must never widen an already running child's permissions.
-  }, 'dsh-subagent:root-scoped-router');
 }

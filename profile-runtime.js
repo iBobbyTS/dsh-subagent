@@ -3,6 +3,54 @@ import {
   ProfileError, assertModelRoute, assertToolNames, parseProfileLabel, profileFingerprint, profileLabel,
 } from './profile-core.js';
 
+const rootsWithHiddenFork = new WeakSet();
+
+/** Parent preflight must not mistake our root-only fork mask for a child policy.
+ * The child still revalidates its actual inherited tools before its first turn.
+ */
+export function parentToolNames(agent) {
+  const names = agent.ctx.tools.schemas(agent).map(tool => tool.name);
+  if (rootsWithHiddenFork.has(agent) && !names.includes('subagent_fork')) names.push('subagent_fork');
+  return names;
+}
+
+/** Replace only a root Agent's inherited spawn entry and hide its inherited fork.
+ * Every effect is reversible; a failed attach must not leave a partial router.
+ */
+export function installRootRouting(agent, definition) {
+  const disposers = [];
+  let disposed = false;
+  let maskingFork = false;
+  let forkMasked = false;
+  const maskFork = () => {
+    if (disposed || maskingFork || forkMasked || !agent.ctx.tools.get('subagent_fork', agent)) return;
+    maskingFork = true;
+    try {
+      disposers.push(agent.ctx.tools.restrict({ deny: ['subagent_fork'] }));
+      forkMasked = true;
+      rootsWithHiddenFork.add(agent);
+    } finally { maskingFork = false; }
+  };
+  try {
+    disposers.push(agent.ctx.tools.register(definition));
+    maskFork();
+    // A blank Agent can switch from a minimal preset to one providing fork.
+    // Restrictions survive that switch, but cannot name a tool before it exists.
+    disposers.push(agent.ctx.on('tools/change', maskFork));
+  } catch (error) {
+    disposed = true;
+    rootsWithHiddenFork.delete(agent);
+    for (const dispose of disposers.reverse()) dispose();
+    throw error;
+  }
+  return () => {
+    if (disposed) return;
+    disposed = true;
+    rootsWithHiddenFork.delete(agent);
+    for (const dispose of disposers.reverse()) dispose();
+  };
+}
+
 /** Read official durable descriptor; no custom session-event types or lifecycle state. */
 export function profileIdentityFromSession(session) {
   if (session?.header?.origin !== 'subagent' || typeof session.snapshotEvents !== 'function') return undefined;
@@ -52,14 +100,15 @@ export async function spawnProfiled({ ctx, agent, args, load, pending, signal })
     if (diagnostics.has(args.profile)) throw diagnostics.get(args.profile);
     throw new ProfileError('PROFILE_NOT_FOUND', `unknown profile "${args.profile}" (available: ${[...profiles.keys()].join(', ') || 'none'})`);
   }
-  const names = agent.ctx.tools.schemas(agent).map(tool => tool.name);
-  assertToolNames(profile, names);
+  assertToolNames(profile, parentToolNames(agent));
   await assertModelRoute(ctx.llm, profile, signal);
   const backend = ctx.subagents.getProvider('spawn');
   if (!backend || backend.inheritsParentContext || !backend.capabilities?.agentOptions
       || typeof backend.prepareContinuable !== 'function') {
     throw new ProfileError('SPAWN_BACKEND_UNAVAILABLE', 'official in-process continuable spawn backend is unavailable');
   }
+  signal?.throwIfAborted();
+  const maxDepth = ctx.subagents.resolveMaxDepth();
   const childId = randomUUID();
   const label = profileLabel(profile, args.description || args.prompt.slice(0, 75));
   pending.set(childId, profile);
@@ -68,15 +117,14 @@ export async function spawnProfiled({ ctx, agent, args, load, pending, signal })
       provider: 'spawn',
       childId,
       label,
-      request: {
-        parent: agent,
-        prompt: [{ type: 'text', text: args.prompt }],
-        ...(args.cwd === undefined ? {} : { cwd: args.cwd }),
-        agentOptions: {
-          provider: profile.provider,
-          model: profile.model,
-          reasoningEffort: profile.reasoning_effort,
-        },
+      parent: agent,
+      ...(maxDepth === undefined ? {} : { maxDepth }),
+      prompt: [{ type: 'text', text: args.prompt }],
+      ...(args.cwd === undefined ? {} : { cwd: args.cwd }),
+      agentOptions: {
+        provider: profile.provider,
+        model: profile.model,
+        reasoningEffort: profile.reasoning_effort,
       },
       signal,
       delivery: 'parent',

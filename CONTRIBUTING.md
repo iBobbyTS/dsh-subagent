@@ -1,22 +1,29 @@
 # Contributing
 
-This fork targets DSH 0.2.1-rc.1 or newer in the 0.2.x series and Node.js >=24.9.0. Profile configuration is TOML; the bundled Host code is plain JavaScript and must not require an install-time build.
+This fork targets the DSH 0.2.2-alpha.3 source contracts and Node.js >=24.9.0. Profile configuration is TOML; the shipped Host code is plain JavaScript and requires no install-time build. Do not restore the old 0.2.1 preset snapshots or weaken the minimum DSH version to make legacy installations load.
 
 ```sh
-npm install --ignore-scripts --legacy-peer-deps
+npm install --ignore-scripts --legacy-peer-deps --package-lock=false
 npm run check
 npm pack --dry-run
 ```
 
-Keep both README languages updated, include regression tests for runtime or validation changes, and preserve the official DSH Subagent lifecycle and `subagent_fork` behavior. Never commit credentials, user Profiles, session data, or `node_modules/`.
+Keep both README languages updated. Preserve native providers, child identity, messaging, completion and resource ownership. Root Agents shadow `subagent` and hide inherited `subagent_fork`; non-Profile children remain untouched, and Profile children retain their own policy after Host unload. Do not write application-profile files or commit credentials, user Profiles, session data, `node_modules/`, or `.agent-work/`.
 
-The bundle carries literal overrides of the shipped Web presets because Agent Preset carriers preserve child expressions and do not evaluate an entire `config: !!js ...` value. Regenerate against the supported installed DSH release (the anchor is its actual entry file, not this plugin):
+## Authoritative source integration
+
+The reference checkout need not be built or have its own dependency directory. Tests use its source aliases and TypeScript's standard-decorator transform, matching the reference's Vitest approach. No installed DSH/Cordis module may substitute for an unmapped source package. An installation anchor may supply **third-party libraries only** when the reference has no dependencies installed. TypeScript and rrule are development-only dependencies; they are not shipped or needed by plugin users.
 
 ```sh
-DSH_TEST_RUNTIME_ANCHOR=/absolute/path/to/dsh/lib/bin.js npm run generate:presets
-DSH_TEST_RUNTIME_ANCHOR=/absolute/path/to/dsh/lib/bin.js npm run check
+DSH_TEST_SOURCE_ROOT=/absolute/path/to/deepseek-harness \
+DSH_TEST_EXTERNAL_ANCHOR=/absolute/path/to/installed/dsh/lib/bin.js \
+npm run check
 ```
 
-The runtime-aware regression compares every emitted preset field with that release's original, allowing only native spawn's `modelSelectionSettings: false`. Do not replace fork, control, workflow or backend rows. Regeneration is a maintainer action, never an install/build script. User/profile overrides still take precedence and must apply the same native spawn setting themselves.
+Without `DSH_TEST_SOURCE_ROOT`, the source integration suites explicitly skip; ordinary unit tests alone do not establish source-runtime compatibility. Temporary fixture homes stay under `.agent-work/tmp/native-shadowing/`, not the real DSH home. Tests never install into or edit the reference repository or a user profile.
 
-The repository's GitHub Issues feature was disabled when the v0.1.0 backlog was recorded; see `docs/issues/` for pending issue drafts.
+The integration suites exercise current source Cordis, scope inheritance, native delegation-tool registration, native tool execution, real prompt assembly, plugin unload/re-enable, delayed fork masking, preserved persona and neighboring tools, protected messaging, and native on-demand structured capture. Agent/provider/model fixtures are explicit: these tests do not by themselves establish real model-backed child completion or current Desktop/Web deployment. Add a real activation test when changing lifecycle behavior; do not claim paid model or live GUI validation from fixture success.
+
+Package tests assert the bundle contains only the Host insertion. Installation order must never change a persona or mode's config. The activation request uses current top-level options and forwards the native Host depth cap. Validate both default and provider-managed cap behavior, failures, and cleanup.
+
+The repository's GitHub Issues feature was disabled when the v0.1.0 backlog was recorded; see [issue drafts](docs/issues/fork-profiles.md) for future fork work.

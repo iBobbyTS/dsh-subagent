@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { validateProfile, ProfileError, parseProfileLabel } from '../profile-core.js';
-import { spawnProfiled, resolveChildProfile, installChildPolicy, profileIdentityFromSession } from '../profile-runtime.js';
+import { spawnProfiled, resolveChildProfile, installChildPolicy, installRootRouting, profileIdentityFromSession } from '../profile-runtime.js';
 import { scanProfiles } from '../profile-store.js';
 import { fileURLToPath } from 'node:url';
 
@@ -27,6 +27,7 @@ function baseContext(overrides = {}) {
     llm: { listProviders: () => [{ id: 'openai-codex' }], resolveCallConfig: async () => ({}) },
     subagents: {
       getProvider: () => ({ inheritsParentContext: false, capabilities: { agentOptions: true }, prepareContinuable: async () => ({}) }),
+      resolveMaxDepth: () => 2,
       startActivation: async (spec) => ({ childId: spec.childId }),
     },
     ...overrides,
@@ -38,6 +39,7 @@ test('spawn uses exact fixed route and official activation; preserves pending ch
   let seen;
   const ctx = baseContext({ subagents: {
     getProvider: () => ({ inheritsParentContext: false, capabilities: { agentOptions: true }, prepareContinuable: async () => ({}) }),
+    resolveMaxDepth: () => 2,
     startActivation: async (spec) => {
       seen = spec;
       assert.equal(pending.get(spec.childId), p);
@@ -55,10 +57,13 @@ test('spawn uses exact fixed route and official activation; preserves pending ch
   assert.equal(result.subagentId, seen.childId);
   assert.equal(seen.provider, 'spawn');
   assert.equal(seen.delivery, 'parent');
-  assert.equal(seen.request.agentOptions.provider, 'openai-codex');
-  assert.equal(seen.request.agentOptions.model, 'gpt-6-luna');
-  assert.equal(seen.request.agentOptions.reasoningEffort, 'xhigh');
-  assert.equal(seen.request.prompt[0].text, 'Trace auth functions');
+  assert.equal(seen.request, undefined, 'current DSH activation options must be top-level');
+  assert.equal(seen.parent, agent);
+  assert.equal(seen.maxDepth, 2);
+  assert.equal(seen.agentOptions.provider, 'openai-codex');
+  assert.equal(seen.agentOptions.model, 'gpt-6-luna');
+  assert.equal(seen.agentOptions.reasoningEffort, 'xhigh');
+  assert.equal(seen.prompt[0].text, 'Trace auth functions');
   assert.equal(pending.size, 0);
 });
 
@@ -167,10 +172,54 @@ test('unknown or malformed profile errors are returned to caller, not silently s
 test('official activation failures preserve the meaningful cause and code', async () => {
   const ctx = baseContext({ subagents: {
     getProvider: () => ({ inheritsParentContext: false, capabilities: { agentOptions: true }, prepareContinuable: async () => ({}) }),
+    resolveMaxDepth: () => 2,
     startActivation: async () => { throw new Error('Active subagent limit reached'); },
   } });
   const pending = new Map();
   await assert.rejects(() => spawnProfiled({ ctx, agent, args: { profile: 'explorer', prompt: 'work' }, load, pending, signal }),
     e => e instanceof ProfileError && e.code === 'SPAWN_FAILED' && /limit/.test(e.message));
   assert.equal(pending.size, 0);
+});
+
+test('root routing hides fork when present and restores both effects exactly once', () => {
+  for (const hasFork of [false, true]) {
+    const actions = [];
+    const root = { ctx: { on: () => () => {}, tools: {
+      get: (name, scope) => { assert.equal(name, 'subagent_fork'); assert.equal(scope, root); return hasFork ? {} : undefined; },
+      register: definition => { assert.equal(definition.name, 'subagent'); actions.push('register'); return () => actions.push('unregister'); },
+      restrict: filter => { assert.deepEqual(filter, { deny: ['subagent_fork'] }); actions.push('restrict'); return () => actions.push('unrestrict'); },
+    } } };
+    const dispose = installRootRouting(root, { name: 'subagent' });
+    dispose();
+    dispose();
+    assert.deepEqual(actions, hasFork ? ['register', 'restrict', 'unrestrict', 'unregister'] : ['register', 'unregister']);
+  }
+});
+
+test('failed root restriction rolls back registration without removing another owner', () => {
+  let released = 0;
+  const collision = new Error('scope-local fork is not restrictable');
+  assert.throws(() => installRootRouting({ ctx: { tools: {
+    register: () => () => released++, get: () => ({}), restrict: () => { throw collision; },
+  } } }, { name: 'subagent' }), error => error === collision);
+  assert.equal(released, 1);
+});
+
+test('host depth cap and native rejection are preserved; cwd stays top-level', async () => {
+  for (const cap of [undefined, 0, 3]) {
+    const ctx = baseContext();
+    ctx.subagents.resolveMaxDepth = () => cap;
+    ctx.subagents.startActivation = async spec => {
+      assert.equal(spec.cwd, '/workspace/child');
+      assert.equal(Object.hasOwn(spec, 'maxDepth'), cap !== undefined);
+      assert.equal(spec.maxDepth, cap);
+      if (cap === 0) throw Object.assign(new Error('Maximum subagent depth reached'), { code: 'MAX_DEPTH' });
+      return { childId: spec.childId };
+    };
+    const pending = new Map();
+    const run = () => spawnProfiled({ ctx, agent, args: { profile: 'explorer', prompt: 'work', cwd: '/workspace/child' }, load, pending, signal });
+    if (cap === 0) await assert.rejects(run, error => error.code === 'SPAWN_FAILED' && /MAX_DEPTH/.test(error.message));
+    else assert.equal((await run()).kind, 'activation');
+    assert.equal(pending.size, 0);
+  }
 });

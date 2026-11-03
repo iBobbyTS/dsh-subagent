@@ -1,8 +1,8 @@
-# dsh-subagent — TOML Subagent Profiles（v0.1.0）
+# dsh-subagent — TOML Subagent Profiles（v0.2.0）
 
 本 fork 将旧版「每个 Profile 一个 `subagent_<name>` 工具」改为 **一个名为 `subagent` 的工具，调用时必须填写 `profile`**。启动、完成通知、继续会话、深度限制、生命周期都使用 DSH 官方 `ctx.subagents.startActivation()`，工具访问限制使用官方 `agent.ctx.tools.restrict()`。
 
-> API 适配目标：DSH 0.2.1-rc.1 及更新的 0.2.x。预设覆盖基于 0.2.1-rc.2，已在该版本真实 Web profile 的 standard、ptc、cordis 预设验证注册、停用恢复与重新启用；其他 DSH 版本的预设需重新生成并验证，Desktop 和真实模型子任务完成流程尚未验证。原 Settings 图形 Profile 编辑器不再提供，配置改为 TOML。
+> API 适配目标：参考源码 DSH 0.2.2-alpha.3 的共享预设工具注册及扁平 activation 参数契约。不再支持旧 0.2.1 运行时，也不使用预设快照兼容旧版。支持直接针对参考源码执行测试；本次版本未安装到当前较旧的 Desktop/Web 运行时，付费模型子任务完成流程尚未验证。原 Settings 图形 Profile 编辑器不再提供，配置改为 TOML。
 
 ## 安装／卸载：只使用官方入口
 
@@ -23,11 +23,13 @@ Desktop 必须先启动过一次以建立 `desktop` Profile，再完全退出 De
 
 Windows Desktop 的相对路径是 `resources\\runtime\\cli\\bin\\dsh.cmd`，位于**实际应用安装目录内**（安装目录可自定义）。桌面应用也有 **Manage dsh Command...** 功能，可将自己的 CLI 加入 PATH。不能用另外安装的 npm `dsh` 修改 Desktop 专属 Profile。
 
-启用插件时，在根 Agent 作用域中注册同名 `subagent`，仅替换 spawn 入口。Bundle 携带从 DSH `0.2.1-rc.2` 生成的 `standard`、`ptc`、`cordis` 官方预设覆盖，仅将原生 spawn 工具的 `modelSelectionSettings` 设为 `false`：固定 TOML Profile 接管模型选择，原生 fallback 留在预设祖先层，避免两个同名工具在 Agent 自身层重复注册。**不修改**原生 spawn/fork 后端、生命周期管理、`subagent_fork`、`send_message`、`list_agents`、`interrupt_agent` 或 workflow 工具。原生 spawn 的可选模型选择及其关联的模型发现不再用于此入口；LLM Provider 本身不受影响。
+**安装目标是整个 DSH 应用 Profile，不是某个模式；无需独立安装器或手工编辑 profile。** Bundle 仅插入 Host 插件，不覆盖 `standard`、`ptc`、`cordis`、persona 或其他 bundle 的 config。在已有和新建的根 Agent（各对话的主 Agent）自身作用域中注册同名 `subagent`，通过官方 shadowing 遮蔽预设祖先层的原生定义；不删除原生定义、不关闭原生模型选择设置或模型发现。替换入口始终使用 TOML 固定模型路由。
 
-预设补丁对**新建或重新打开的会话**生效，已经运行的会话保留旧预设修订；安装或升级后请重启 Web/应用再验证。停用 Host 插件恢复原生基础 `subagent`；停用或卸载整个 bundle 后，新会话恢复完整官方预设。没有独立安装器、编译步骤或自定义生命周期服务。
+根 Agent 继承的 `subagent_fork` 暂时隐藏，等待后续重新设计。这是 Agent 局部工具限制，不是全局卸载工具包或 fork 后端；之后切换空白 Agent 预设或延迟注册而出现的 fork 也会隐藏。普通／非本插件 Profile 的子 Agent 不安装根路由或根 fork 限制；Profile 子 Agent 按自己的 TOML 应用权限。`send_message`、`list_agents`、`interrupt_agent`、workflow、provider 和生命周期服务不被替换；workflow 不经过本工具的 Profile 路由。
 
-组合范围是上述三个内置预设，`minimal` 不变。Profile/用户层的同名预设覆盖优先级更高；自定义预设应同样关闭其原生 spawn 的 `modelSelectionSettings`，否则仍会同层冲突。其他 bundle 对这些内置预设的较低优先级定制不会被合并。
+停用／卸载 Host 插件时撤销根 Agent 的注册和限制，恢复原生 spawn 和 fork 定义。Agent 释放和插件卸载均有清理所有权；已有 Profile 子 Agent 的限制仍归子作用域所有，不因插件卸载扩大权限。是否需要重启取决于安装环境的代码重载能力。由 v0.1.0 升级后请在新会话中验证，已有 Agent 可能保留旧预设修订。曾手工复制旧预设覆盖的用户需先核对所有权再自行清理，本插件不会删除用户配置。
+
+适用于具备所需原生服务的各类预设，无需逐模式复制配置。没有 fork 的预设不添加空限制。其他插件若也在同一个根 Agent 层注册同名 `subagent` 或 `subagent_fork`，视为冲突，不静默覆盖。
 
 ## TOML 配置
 
@@ -93,10 +95,12 @@ subagent({
 - `UNSUPPORTED_SKILL_FILTER`：非空 Skill 黑白名单无法通过官方 API 完整执行，因此拒绝该 Profile。
 - `PROFILE_CHANGED`：冷恢复时 TOML 与启动时持久化的 Profile 指纹不一致，拒绝不安全恢复。
 
+父预检会区分本插件的根 fork 屏蔽与子权限策略，因此子 Profile 仍可允许或禁止 `subagent_fork`。这不保证子预设一定提供 fork：子 Agent 首轮之前仍严格检查自己的实际工具；若因预设切换等原因缺失，继续拒绝启动。
+
 工具限制由 DSH 官方 `tools.restrict` 实施，不是文件系统沙箱。模型运行期间的后续错误仍由官方完成通知报告，而不是伪造同步 Tool Result。Profile ID 和指纹放在 DSH 已有的 Subagent descriptor label 中，不创建新的 Session Event 类型。
 
 ## 暂不做
 
-`subagent_fork` 保留官方原样。Skill 黑白名单没有可确保目录、加载与调用一致的原生接口，v0.1.0 不自行重写。后续需求记录在 [`docs/issues/`](docs/issues/)；提交时仓库关闭了 GitHub Issues（API 返回 410），因此先把草稿纳入版本控制。
+fork 重设计暂不实现，根 Agent 的继承 `subagent_fork` 按上文隐藏。Skill 黑白名单没有可确保目录、加载与调用一致的原生接口，当前版本不自行重写。后续需求记录在 [`docs/issues/`](docs/issues/)；提交时仓库关闭了 GitHub Issues（API 返回 410），因此先把草稿纳入版本控制。
 
 源码预构建为 JavaScript，GitHub 安装不需要允许构建脚本。运行测试：`npm install --ignore-scripts --legacy-peer-deps && npm run check`。

@@ -1,6 +1,6 @@
 {
   "name": "dsh-subagent",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "TOML-backed, profile-routed Spawn tool that reuses DeepSeek Harness subagents",
   "type": "module",
   "license": "MIT",
@@ -10,7 +10,7 @@
   },
   "homepage": "https://github.com/iBobbyTS/dsh-subagent",
   "bugs": { "url": "https://github.com/iBobbyTS/dsh-subagent/issues" },
-  "engines": { "node": ">=24.9.0", "dsh": ">=0.2.1-rc.1 <0.3.0" },
+  "engines": { "node": ">=24.9.0", "dsh": ">=0.2.2-alpha.3 <0.3.0" },
   "main": "./index.js",
   "exports": {
     ".": "./index.js",
@@ -19,22 +19,21 @@
     "./icon": "./icon.svg"
   },
   "files": [
-    "index.js", "profile-core.js", "profile-runtime.js", "profile-store.js", "preset-composition.cjs",
+    "index.js", "profile-core.js", "profile-runtime.js", "profile-store.js",
     "cordis.patch.yml", "README.md", "README.zh.md", "LICENSE",
     "locale/en.json", "locale/zh.json", "icon.svg"
   ],
   "dsh": { "bundle": { "patch": "./cordis.patch.yml" } },
   "dependencies": { "@iarna/toml": "^2.2.5" },
-  "devDependencies": { "yaml": "^2.8.1" },
+  "devDependencies": { "yaml": "^2.8.1", "typescript": "^6.0.3", "rrule": "2.8.1" },
   "peerDependencies": {
-    "@deepseek-ai/cordis": ">=4.0.0",
-    "@deepseek-ai/dsh-tools": ">=0.2.1-rc.1",
-    "@deepseek-ai/dsh-subagent": ">=0.2.1-rc.1",
-    "@deepseek-ai/dsh-home-paths": ">=0.2.1-rc.1"
+    "@deepseek-ai/cordis": ">=4.0.6-alpha.2 <5",
+    "@deepseek-ai/dsh-tools": ">=0.2.2-alpha.3 <0.3.0",
+    "@deepseek-ai/dsh-subagent": ">=0.2.2-alpha.3 <0.3.0",
+    "@deepseek-ai/dsh-home-paths": ">=0.2.2-alpha.3 <0.3.0"
   },
   "scripts": {
     "test": "node --test tests/*.test.mjs",
-    "generate:presets": "node preset-composition.cjs",
-    "check": "node --check index.js && node --check profile-core.js && node --check profile-store.js && node --check profile-runtime.js && node --check preset-composition.cjs && npm test"
+    "check": "node --check index.js && node --check profile-core.js && node --check profile-store.js && node --check profile-runtime.js && npm test"
   }
 }
