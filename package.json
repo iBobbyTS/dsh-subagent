@@ -1,87 +1,33 @@
 {
   "name": "dsh-subagent",
-  "version": "0.2.0",
-  "description": "Named subagent profiles with configurable model routing and reasoning for DeepSeek Harness",
-  "keywords": [
-    "dsh-plugin",
-    "deepseek-harness",
-    "subagent",
-    "agent"
-  ],
+  "version": "0.1.0",
+  "description": "TOML-backed, profile-routed Spawn tool that reuses DeepSeek Harness subagents",
+  "type": "module",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/xie-tj/dsh-subagent.git"
+    "url": "git+https://github.com/iBobbyTS/dsh-subagent.git"
   },
-  "homepage": "https://github.com/xie-tj/dsh-subagent#readme",
-  "bugs": {
-    "url": "https://github.com/xie-tj/dsh-subagent/issues"
-  },
-  "type": "module",
-  "packageManager": "pnpm@11.7.0",
-  "engines": {
-    "node": "^22.19.0 || >=24.0.0"
-  },
-  "main": "index.js",
-  "exports": {
-    ".": "./index.js",
-    "./client": "./client.cjs",
-    "./invariant": "./invariant.js",
-    "./package.json": "./package.json"
-  },
+  "homepage": "https://github.com/iBobbyTS/dsh-subagent",
+  "bugs": { "url": "https://github.com/iBobbyTS/dsh-subagent/issues" },
+  "engines": { "node": ">=24.9.0", "dsh": ">=0.2.1-rc.1 <0.3.0" },
+  "main": "./index.js",
+  "exports": { ".": "./index.js", "./package.json": "./package.json" },
   "files": [
-    "index.js",
-    "client.cjs",
-    "invariant.js",
-    "cordis.patch.yml",
-    "README.md",
-    "README.zh.md",
-    "README.i18n.yaml",
-    "LICENSE",
-    "package.json"
+    "index.js", "profile-core.js", "profile-runtime.js", "profile-store.js",
+    "cordis.patch.yml", "README.md", "README.zh.md", "LICENSE",
+    "locale/en.json", "locale/zh.json", "icon.svg"
   ],
-  "dsh": {
-    "bundle": {
-      "patch": "./cordis.patch.yml"
-    },
-    "client": {
-      "platform": "web",
-      "inject": [
-        "@deepseek-ai/dsh-api-remotes",
-        "@deepseek-ai/dsh-client-connection",
-        "@deepseek-ai/dsh-client-runtime",
-        "@deepseek-ai/dsh-client-locale",
-        "@deepseek-ai/dsh-client-ui-settings"
-      ]
-    }
-  },
-  "dependencies": {
-    "@deepseek-ai/schemastery": "^3.18.1"
-  },
-  "devDependencies": {
-    "@deepseek-ai/cordis-plugin-include": "^1.0.6",
-    "@deepseek-ai/cordis-plugin-loader": "^1.0.2",
-    "@deepseek-ai/dsh-scope": "0.1.1-rc.2"
-  },
+  "dsh": { "bundle": { "patch": "./cordis.patch.yml" } },
+  "dependencies": { "@iarna/toml": "^2.2.5" },
   "peerDependencies": {
-    "@deepseek-ai/cordis": "^4.0.1",
-    "@deepseek-ai/dsh-api-remotes": "^0.1.1-rc.2",
-    "@deepseek-ai/dsh-client-connection": "^0.1.1-rc.2",
-    "@deepseek-ai/dsh-client-runtime": "^0.1.1-rc.2",
-    "@deepseek-ai/dsh-client-locale": "^0.1.1-rc.2",
-    "@deepseek-ai/dsh-client-ui-settings": "^0.1.1-rc.2",
-    "@deepseek-ai/dsh-invariants": "^0.1.1-rc.2",
-    "@deepseek-ai/dsh-settings": "^0.1.1-rc.2",
-    "@deepseek-ai/dsh-subagent": "^0.1.1-rc.2",
-    "@deepseek-ai/dsh-tool-subagent": "^0.1.1-rc.2",
-    "@deepseek-ai/dsh-tools": "^0.1.1-rc.2",
-    "react": "^18.2.0"
+    "@deepseek-ai/cordis": ">=4.0.0",
+    "@deepseek-ai/dsh-tools": ">=0.2.1-rc.1",
+    "@deepseek-ai/dsh-subagent": ">=0.2.1-rc.1",
+    "@deepseek-ai/dsh-home-paths": ">=0.2.1-rc.1"
   },
   "scripts": {
-    "test": "node --test tests/smoke.mjs tests/client.mjs tests/composition.mjs",
-    "test:composition": "node --test tests/composition.mjs"
-  },
-  "publishConfig": {
-    "access": "public"
+    "test": "node --test tests/*.test.mjs",
+    "check": "node --check index.js && node --check profile-core.js && node --check profile-store.js && node --check profile-runtime.js && npm test"
   }
 }

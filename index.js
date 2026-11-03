@@ -1,383 +1,196 @@
-import z from '@deepseek-ai/schemastery'
-import { defineTool } from '@deepseek-ai/dsh-tools'
-import { settingsNamespace } from '@deepseek-ai/dsh-settings'
-import * as toolSubagent from '@deepseek-ai/dsh-tool-subagent'
-
-export const name = 'dsh-subagent'
-export const inject = ['settings', 'agents']
-
-const NS = settingsNamespace('dsh-subagent')
-const PROFILE_NAME = /^[a-z][a-z0-9_-]{0,23}$/
-
-const DEFAULT_PROFILES = [
-  {
-    name: 'fast',
-    description: 'Quick lookups, lightweight checks, short summaries.',
-    backend: 'spawn',
-    modelRouting: { mode: 'follow-conversation' },
-    reasoning: { mode: 'custom', effort: 'low' },
-  },
-  {
-    name: 'reviewer',
-    description: 'Conversation-aware review and continuation work at high effort.',
-    backend: 'fork',
-    modelRouting: { mode: 'follow-conversation' },
-    reasoning: { mode: 'custom', effort: 'high' },
-  },
-]
-
-const modelRoutingSchema = z.union([
-  z.object({
-    mode: z.const('follow-conversation').required(),
-  }),
-  z.object({
-    mode: z.const('custom').required(),
-    provider: z.string().min(1).required(),
-    model: z.string().min(1).required(),
-  }),
-])
-
-const reasoningSchema = z.union([
-  z.object({
-    mode: z.const('follow-conversation').required(),
-  }),
-  z.object({
-    mode: z.const('custom').required(),
-    effort: z.string().min(1).required(),
-  }),
-])
-
-const profileSchema = z.object({
-  name: z.string().pattern(PROFILE_NAME).required(),
-  description: z.string().min(1),
-  backend: z.string().min(1).default('spawn'),
-  modelRouting: modelRoutingSchema.required(),
-  reasoning: reasoningSchema.required(),
-  maxTokens: z.number().step(1).min(1).max(Number.MAX_SAFE_INTEGER),
-  persona: z.string().min(1),
-  maxDepth: z.union([
-    z.natural().max(Number.MAX_SAFE_INTEGER),
-    z.const('provider-managed'),
-  ]),
-  backgroundMode: z.union(['one-shot', 'continuable']),
-  // Keep omission distinct from an explicit empty filter: tool-subagent rejects
-  // an empty filter instead of silently hiding every child tool.
-  toolFilter: z.object({
-    allow: z.array(z.string().min(1)).default(undefined),
-    deny: z.array(z.string().min(1)).default(undefined),
-  }).default(undefined),
-})
-
-export const Config = z.object({
-  profiles: z.array(profileSchema).default(DEFAULT_PROFILES),
-  // Omission IS the cleared state; an empty string never passes PROFILE_NAME.
-  defaultProfile: z.string().pattern(PROFILE_NAME).default(undefined),
-})
-
-const PROFILE_KEYS = new Set([
-  'name', 'description', 'backend', 'modelRouting', 'reasoning', 'maxTokens',
-  'persona', 'maxDepth', 'backgroundMode', 'toolFilter',
-])
-const MODEL_ROUTING_KEYS = new Set(['mode', 'provider', 'model'])
-const REASONING_KEYS = new Set(['mode', 'effort'])
-
-function assertKnownKeys(value, allowed, path) {
-  const unknown = Object.keys(value).find(key => !allowed.has(key))
-  if (unknown !== undefined) throw new Error(`dsh-subagent: ${path} has unknown field "${unknown}"`)
-}
-
-export function assertProfiles(value) {
-  if (!Array.isArray(value?.profiles)) throw new Error('dsh-subagent: profiles must be an array')
-  const seen = new Set()
-  for (const profile of value.profiles) {
-    assertKnownKeys(profile, PROFILE_KEYS, `profile "${String(profile.name)}"`)
-    assertKnownKeys(profile.modelRouting, MODEL_ROUTING_KEYS, `profile "${profile.name}" modelRouting`)
-    assertKnownKeys(profile.reasoning, REASONING_KEYS, `profile "${profile.name}" reasoning`)
-    if (seen.has(profile.name)) throw new Error(`dsh-subagent: duplicate profile name "${profile.name}"`)
-    seen.add(profile.name)
-    if (profile.modelRouting.mode === 'follow-conversation'
-      && ('provider' in profile.modelRouting || 'model' in profile.modelRouting)) {
-      throw new Error(`dsh-subagent: profile "${profile.name}" follow-conversation modelRouting cannot set provider or model`)
-    }
-    if (profile.reasoning.mode === 'follow-conversation' && 'effort' in profile.reasoning) {
-      throw new Error(`dsh-subagent: profile "${profile.name}" follow-conversation reasoning cannot set effort`)
-    }
-    if (profile.toolFilter !== undefined
-      && (profile.toolFilter.allow?.length ?? 0) === 0
-      && (profile.toolFilter.deny?.length ?? 0) === 0) {
-      throw new Error(`dsh-subagent: profile "${profile.name}" has an empty toolFilter`)
-    }
-  }
-  if (value.defaultProfile !== undefined
-    && !value.profiles.some(profile => profile.name === value.defaultProfile)) {
-    throw new Error(`dsh-subagent: defaultProfile "${value.defaultProfile}" does not match any profile`)
-  }
-}
-
-function childConfig(profile) {
-  const agentOptions = {}
-  if (profile.modelRouting.mode === 'custom') {
-    agentOptions.provider = profile.modelRouting.provider
-    agentOptions.model = profile.modelRouting.model
-  }
-  if (profile.reasoning.mode === 'custom') {
-    agentOptions.reasoningEffort = profile.reasoning.effort
-  }
-  if (profile.maxTokens !== undefined) agentOptions.maxTokens = profile.maxTokens
-  const config = {
-    provider: profile.backend,
-    toolName: `subagent_${profile.name}`,
-    // Spawn is the continuable profile; fork keeps its inherited-context
-    // delegation one-shot unless a profile explicitly selects another mode.
-    backgroundMode: profile.backgroundMode
-      ?? (profile.backend === 'spawn' ? 'continuable' : 'one-shot'),
-  }
-  if (Object.keys(agentOptions).length > 0) config.agentOptions = agentOptions
-  for (const key of ['persona', 'toolFilter', 'maxDepth']) {
-    if (profile[key] !== undefined) config[key] = profile[key]
-  }
-  return config
-}
-
-function publicProfile(profile) {
-  const result = {
-    name: profile.name,
-    modelRouting: structuredClone(profile.modelRouting),
-    reasoning: structuredClone(profile.reasoning),
-  }
-  for (const key of [
-    'description', 'backend', 'maxTokens', 'persona', 'maxDepth',
-    'backgroundMode', 'toolFilter',
-  ]) {
-    if (profile[key] !== undefined) result[key] = profile[key]
-  }
-  return result
-}
-
-function copyProfileFields(args) {
-  const profile = { name: args.name }
-  for (const key of [
-    'description', 'backend', 'modelRouting', 'reasoning', 'maxTokens',
-    'persona', 'maxDepth', 'backgroundMode', 'toolFilter',
-  ]) {
-    if (args[key] !== undefined) profile[key] = structuredClone(args[key])
-  }
-  return profile
-}
-
-/** Order: directly after tool-subagent's own delegation-policy sections (116.5). */
-const DEFAULT_SECTION_ORDER = 116.55
-
 /**
- * Model-visible steering for the default profile. Empty while unset or while
- * that profile's delegation tool is not mounted: naming an absent tool would
- * steer unnamed requests into a guaranteed failure.
+ * Named TOML subagent profiles layered over DSH's official Spawn/activation runtime.
+ * The plugin owns only model-facing routing and child-scoped policy; it does not
+ * replace the native subagent provider, history, messaging, or completion flow.
  */
-function defaultSectionText(value, fibers) {
-  const name = value?.defaultProfile
-  if (typeof name !== 'string' || !fibers.has(name)) return ''
-  const profile = (Array.isArray(value?.profiles) ? value.profiles : [])
-    .find(candidate => candidate.name === name)
-  const description = typeof profile?.description === 'string' && profile.description.length > 0
-    ? ' — ' + profile.description
-    : ''
-  return 'Named subagent profiles are available as `subagent_<name>` tools.'
-    + ' The default profile is ' + name + ' (`subagent_' + name + '`' + description + ').'
-    + ' When a request delegates work to a subagent without naming one, use `subagent_' + name + '`'
-    + ' unless another profile clearly fits better.'
+import { watch } from 'node:fs';
+import { defineTool } from '@deepseek-ai/dsh-tools';
+import { dshHomePath } from '@deepseek-ai/dsh-home-paths';
+import { ProfileError, assertModelRoute, assertToolNames } from './profile-core.js';
+import { ensureProfileDirectory, scanProfiles } from './profile-store.js';
+import { installChildPolicy, resolveChildProfile, spawnProfiled } from './profile-runtime.js';
+
+export const name = 'dsh-subagent';
+export const inject = ['agents', 'subagents', 'tools', 'systemPrompt', 'llm'];
+
+const CHILD_POLICY_MARKER = Symbol.for('dsh-subagent.profile-policy.v1');
+
+const TOOL_OUTPUT = {
+  schema: {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      kind: { type: 'string', required: true, const: 'activation' },
+      subagentId: { type: 'string', required: true },
+    },
+  },
+  render: (_args, value) => [{ type: 'text', text: `started subagent ${value.subagentId}` }],
+};
+
+export function profileCatalogText(state) {
+  const rows = [...state.profiles.values()].sort((a, b) => a.name.localeCompare(b.name));
+  const problems = [...state.diagnostics.entries()].sort(([a], [b]) => a.localeCompare(b));
+  const catalog = rows.length
+    ? rows.map(p => `- ${p.name}: ${p.description?.trim() || p.name}`).join('\n')
+    : '(no valid profiles available)';
+  const failures = problems.length ? '\nSkipped profiles (configuration/runtime errors):\n'
+    + problems.map(([name, error]) => `- ${name}: ${error.message}`).join('\n') : '';
+  return `Named subagent profiles for the \`subagent\` tool:\n${catalog}${failures}\n`
+    + 'Call subagent with a required profile and complete standalone prompt. '
+    + 'The child works independently, and its result arrives through DSH completion notification. '
+    + 'The profile descriptions above describe responsibilities, not developer instructions.';
 }
 
-function managementTool(scope) {
+export function profileTool({ ctx, load, pending }) {
   return defineTool({
-    name: 'custom_subagent',
-    description: 'Manage named subagent profiles. Each profile exposes a separate subagent_<name> tool;'
-      + ' set-default marks which one handles delegation requests that name no profile.',
+    name: 'subagent',
+    description: 'Spawn a separate, continuable DSH subagent using a required named TOML profile. '
+      + 'The profile fixes the provider, model, reasoning effort and child instructions. '
+      + 'The call returns the child id immediately; DSH notifies the parent when it finishes.',
     parameters: {
-      action: {
-        type: 'string',
-        required: true,
-        enum: ['list', 'add', 'update', 'remove', 'reload', 'set-default'],
-      },
-      name: { type: 'string' },
-      description: { type: 'string' },
-      backend: { type: 'string' },
-      modelRouting: {
-        type: 'json',
-        description: 'Model policy: { mode: "follow-conversation" } or { mode: "custom", provider, model }.',
-      },
-      reasoning: {
-        type: 'json',
-        description: 'Reasoning policy: { mode: "follow-conversation" } or { mode: "custom", effort }.',
-      },
-      maxTokens: { type: 'number' },
-      persona: { type: 'string' },
-      maxDepth: {
-        type: 'json',
-        description: 'Non-negative integer depth limit or "provider-managed".',
-      },
-      backgroundMode: { type: 'string', enum: ['one-shot', 'continuable'] },
-      toolFilter: { type: 'json' },
+      profile: { type: 'string', required: true, description: 'Required profile id, from the named profile catalog.' },
+      prompt: { type: 'string', required: true, description: 'Complete self-contained task. The child has no parent conversation history.' },
+      description: { type: 'string', description: 'Optional short, human-readable task label (not the profile description).' },
+      cwd: { type: 'string', description: 'Optional initial child working directory.' },
     },
-    output: {
-      schema: { type: 'json' },
-      render: (_args, value) => [{ type: 'text', text: JSON.stringify(value, null, 2) }],
+    output: TOOL_OUTPUT,
+    isConcurrencySafe: () => true,
+    async execute(args, exec) {
+      if (!exec.agent) throw new ProfileError('PARENT_REQUIRED', 'subagent must be called by a live parent Agent');
+      return spawnProfiled({ ctx, agent: exec.agent, args, load, pending, signal: exec.signal });
     },
-    isConcurrencySafe: () => false,
-    async execute(args) {
-      const current = scope.get()
-      if (args.action === 'list' || args.action === 'reload') {
-        return { ok: true, defaultProfile: current.defaultProfile, profiles: current.profiles.map(publicProfile) }
-      }
-      if (args.action === 'set-default') {
-        // An absent name clears the designation; a present one must name a live profile.
-        if (args.name !== undefined && !PROFILE_NAME.test(args.name)) {
-          throw new Error(`profile name must match ${String(PROFILE_NAME)}`)
-        }
-        if (args.name !== undefined && !current.profiles.some(profile => profile.name === args.name)) {
-          return { ok: false, error: `profile "${String(args.name)}" does not exist` }
-        }
-        await scope.update({ defaultProfile: args.name })
-        return { ok: true, defaultProfile: scope.get().defaultProfile, profiles: scope.get().profiles.map(publicProfile) }
-      }
-      if (args.action === 'remove') {
-        if (typeof args.name !== 'string' || !current.profiles.some(profile => profile.name === args.name)) {
-          return { ok: false, error: `profile "${String(args.name)}" does not exist` }
-        }
-        if (current.defaultProfile === args.name) {
-          return {
-            ok: false,
-            error: `profile "${args.name}" is the default subagent; choose another default first`
-              + ' (set-default without "name" clears it)',
-          }
-        }
-        await scope.update({ profiles: current.profiles.filter(profile => profile.name !== args.name) })
-        return {
-          ok: true,
-          defaultProfile: scope.get().defaultProfile,
-          profiles: scope.get().profiles.map(publicProfile),
-        }
-      }
-      if (args.action !== 'add' && args.action !== 'update') {
-        throw new Error(`unknown action "${String(args.action)}"`)
-      }
-      if (typeof args.name !== 'string' || !PROFILE_NAME.test(args.name)) {
-        throw new Error(`profile name must match ${String(PROFILE_NAME)}`)
-      }
-      const existing = current.profiles.find(profile => profile.name === args.name)
-      if (args.action === 'add' && existing !== undefined) {
-        return { ok: false, error: `profile "${args.name}" already exists` }
-      }
-      const next = copyProfileFields(args)
-      if (existing === undefined) {
-        next.modelRouting ??= { mode: 'follow-conversation' }
-        next.reasoning ??= { mode: 'follow-conversation' }
-      }
-      const profiles = current.profiles
-        .filter(profile => profile.name !== args.name)
-        .concat(existing === undefined ? next : { ...existing, ...next })
-      await scope.update({ profiles })
-      return { ok: true, profiles: scope.get().profiles.map(publicProfile) }
-    },
-  })
+  });
 }
 
-export function apply(ctx, config) {
-  const settings = ctx.settings
-  const scope = settings.register(NS, Config, {
-    base: config,
-    validate: assertProfiles,
-  })
-  const records = new Map()
-  let stopping = false
-
-  function attachAgent(agent) {
-    if (stopping || records.has(agent) || !ctx.agents.roots().includes(agent)) return
-    const fibers = new Map()
-    const signatures = new Map()
-    let active = true
-    let tail = Promise.resolve()
-
-    async function unmount(profileName) {
-      const mounted = fibers.get(profileName)
-      if (mounted === undefined) return
-      fibers.delete(profileName)
-      signatures.delete(profileName)
-      await mounted.dispose()
+/** A profile is eligible for this parent only if native route/tool checks pass. */
+export async function validatedCatalog(ctx, agent, load, signal) {
+  const { profiles: parsed, diagnostics } = load();
+  const profiles = new Map();
+  const toolNames = ctx.tools.schemas(agent).map(tool => tool.name);
+  for (const [name, profile] of parsed) {
+    try {
+      assertToolNames(profile, toolNames);
+      await assertModelRoute(ctx.llm, profile, signal);
+      profiles.set(name, profile);
+    } catch (error) {
+      diagnostics.set(name, error instanceof ProfileError ? error
+        : new ProfileError('PROFILE_VALIDATION_FAILED', `${name}: ${error?.message ?? String(error)}`));
     }
+  }
+  return { profiles, diagnostics };
+}
 
-    async function reconcile(value) {
-      if (!active) return
-      const profiles = Array.isArray(value?.profiles) ? value.profiles : []
-      const names = new Set(profiles.map(profile => profile.name))
-      for (const profileName of [...fibers.keys()]) {
-        if (!names.has(profileName)) await unmount(profileName)
+/** Load once per DSH composition; tool registrations shadow only root Agent scopes. */
+export function apply(ctx) {
+  const directory = dshHomePath('agents');
+  ensureProfileDirectory(directory);
+  const load = () => scanProfiles(directory);
+  const pending = new Map();
+  const roots = new Map();
+  let unloading = false;
+  let watcher;
+  let refreshTimer;
+
+  const refresh = async (agent) => {
+    const slot = roots.get(agent);
+    if (!slot || unloading) return;
+    const revision = ++slot.revision;
+    try {
+      const next = await validatedCatalog(ctx, agent, load);
+      if (unloading || !roots.has(agent) || slot.revision !== revision) return;
+      slot.state = next;
+      for (const [key, diagnostic] of next.diagnostics) {
+        ctx.logger.warn(`dsh-subagent: skipped ${key}: ${diagnostic.message}`);
       }
-      for (const profile of profiles) {
-        const signature = JSON.stringify(publicProfile(profile))
-        if (signatures.get(profile.name) === signature) continue
-        await unmount(profile.name)
-        try {
-          const fiber = agent.ctx.plugin(toolSubagent, childConfig(profile))
-          fibers.set(profile.name, { dispose: () => fiber.dispose() })
-          signatures.set(profile.name, signature)
-        } catch (error) {
-          ctx.logger.error(`dsh-subagent: profile "${profile.name}" failed to mount for agent ${agent.id}`)
-          ctx.logger.error(error)
-        }
+    } catch (error) {
+      if (!unloading && roots.has(agent) && slot.revision === revision) {
+        slot.state = { profiles: new Map(), diagnostics: new Map([
+          ['<directory>', error instanceof ProfileError ? error
+            : new ProfileError('PROFILE_DIRECTORY_UNAVAILABLE', error?.message ?? String(error))],
+        ]) };
       }
     }
+  };
 
-    function enqueue(value) {
-      const run = tail.then(() => reconcile(value))
-      tail = run.catch(error => {
-        ctx.logger.error(`dsh-subagent: profile synchronization failed for agent ${agent.id}`)
-        ctx.logger.error(error)
-      })
-      return tail
+  const scheduleRefresh = () => {
+    if (refreshTimer !== undefined) clearTimeout(refreshTimer);
+    refreshTimer = setTimeout(() => {
+      refreshTimer = undefined;
+      for (const agent of roots.keys()) void refresh(agent);
+    }, 100);
+    refreshTimer.unref?.();
+  };
+
+  const attachRoot = (agent) => {
+    if (roots.has(agent) || unloading) return;
+    const slot = { revision: 0, state: { profiles: new Map(), diagnostics: new Map() } };
+    const disposers = [];
+    try {
+      // Exact Agent scope shadows the native subagent tool registered by standard/PTC presets.
+      disposers.push(agent.ctx.tools.register(profileTool({ ctx, load, pending })));
+      disposers.push(agent.ctx.systemPrompt.section({
+        name: 'dsh-subagent:profiles',
+        order: (agent.ctx.systemPrompt.getSectionOrder('TOOL_SUBAGENT') ?? 116) + 0.1,
+        text: () => profileCatalogText(slot.state),
+      }));
+      slot.dispose = () => {
+        for (const dispose of disposers.reverse()) dispose();
+      };
+      roots.set(agent, slot);
+    } catch (error) {
+      for (const dispose of disposers.reverse()) dispose();
+      throw error;
     }
+  };
 
-    const cleanup = agent.ctx.effect(() => {
-      const managementFiber = agent.ctx.plugin({
-        name: 'dsh-subagent-management',
-        inject: ['tools', 'systemPrompt'],
-        apply(agentCtx) {
-          agentCtx.tools.register(managementTool(scope))
-          // Reads live scope state on every prompt render; disposal rides the fiber.
-          agentCtx.systemPrompt.section({
-            name: 'dsh-subagent:default-profile',
-            order: DEFAULT_SECTION_ORDER,
-            text: () => defaultSectionText(scope.get(), fibers),
-          })
-        },
-      })
-      void enqueue(scope.get())
-      return async () => {
-        active = false
-        await managementFiber.dispose()
-        await tail
-        for (const profileName of [...fibers.keys()]) await unmount(profileName)
-        fibers.clear()
-        signatures.clear()
-        if (records.get(agent)?.cleanup === cleanup) records.delete(agent)
-      }
-    }, `dsh-subagent: agent ${agent.id}`)
-    records.set(agent, { cleanup, sync: enqueue })
+  const detachRoot = (agent) => {
+    const slot = roots.get(agent);
+    if (!slot) return;
+    roots.delete(agent);
+    slot.dispose();
+  };
+
+  const attachChild = (agent) => {
+    if (agent[CHILD_POLICY_MARKER]) return;
+    const profile = resolveChildProfile(agent.session, pending, load);
+    if (!profile) return;
+    installChildPolicy(agent, profile);
+    agent[CHILD_POLICY_MARKER] = true;
+  };
+
+  // Handler is awaited by DSH AgentLoop before a newly created child runs its first turn.
+  ctx.on('agent/created', async ({ agent }) => {
+    if (ctx.agents.roots().includes(agent)) {
+      attachRoot(agent);
+      await refresh(agent);
+    } else {
+      attachChild(agent);
+    }
+  });
+  ctx.on('agent/disposed', ({ agent }) => { detachRoot(agent); });
+  ctx.on('llm/adapters-updated', scheduleRefresh);
+  ctx.on('llm/models-updated', scheduleRefresh);
+
+  for (const agent of ctx.agents.list()) {
+    if (ctx.agents.roots().includes(agent)) {
+      attachRoot(agent);
+      void refresh(agent);
+    } else attachChild(agent);
+  }
+  try {
+    watcher = watch(directory, { persistent: false }, scheduleRefresh);
+    watcher.on('error', (error) => ctx.logger.warn(`dsh-subagent: profile watcher: ${error.message}`));
+  } catch (error) {
+    ctx.logger.warn(`dsh-subagent: unable to watch ${directory}: ${error.message}; new profile changes are still read at spawn time`);
   }
 
-  const stopSettings = scope.watch(next => {
-    for (const record of records.values()) void record.sync(next)
-  })
-
-  ctx.effect(() => {
-    const stopCreated = ctx.on('agent/created', ({ agent }) => attachAgent(agent))
-    for (const agent of ctx.agents.roots()) attachAgent(agent)
-    return async () => {
-      stopping = true
-      stopCreated()
-      stopSettings()
-      const cleanups = [...records.values()].map(record => record.cleanup)
-      records.clear()
-      await Promise.allSettled(cleanups.map(cleanup => cleanup()))
-    }
-  }, 'dsh-subagent: agent-scoped profiles')
+  ctx.effect(() => () => {
+    unloading = true;
+    watcher?.close();
+    if (refreshTimer !== undefined) clearTimeout(refreshTimer);
+    for (const agent of [...roots.keys()]) detachRoot(agent);
+    pending.clear();
+    // Child-scoped policies remain owned by each child Agent until its own disposal;
+    // unloading the router must never widen an already running child's permissions.
+  }, 'dsh-subagent:root-scoped-router');
 }

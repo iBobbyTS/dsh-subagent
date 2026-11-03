@@ -1,0 +1,17 @@
+# Issue draft: Native agent-scoped Skill allow/deny enforcement
+
+> GitHub Issues was disabled in `iBobbyTS/dsh-subagent` when this draft was prepared (the API returned HTTP 410). Publish this on this fork after enabling Issues. Do not publish on the upstream DSH repository without separate approval.
+
+## Problem
+
+Subagent Profiles have `skill_whitelist` and `skill_blacklist` fields, but DSH's SkillRegistry currently has no native equivalent to `agent.ctx.tools.restrict({ allow, deny })`. Skill discovery uses `ctx.skills.snapshot/list`, content loading uses `ctx.skills.get`, and user `/skill` invocations use another code path. Filtering only a catalog string or replacing the Skill tool is insufficient and potentially unsafe.
+
+## Desired v0.2 improvement
+
+Implement the two fields only when DSH exposes a native Agent-scoped Skill restriction across discovery, loading, and model invocation, with predictable behavior for explicitly user-invoked Skills. Enforce restrictions before a child's first step and on cold resume; validate missing names. Do not reimplement the Skill lifecycle or create a shadow Skill registry.
+
+## Current v0.1.0 behavior
+
+Empty Skill arrays are accepted as no restrictions. Nonempty arrays make the Profile invalid with `UNSUPPORTED_SKILL_FILTER`, so no child can be spawned under an unenforced policy.
+
+Relevant DSH sources: `packages/skill/skill/src/index.ts`, `packages/skill/tool-skill/src/index.ts`.

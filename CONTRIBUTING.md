@@ -1,16 +1,13 @@
 # Contributing
 
-Contributions are welcome through GitHub issues and pull requests.
-
-## Development
-
-Requirements: Node.js `^22.19.0` or `>=24.0.0` and pnpm 11.7.0.
+This fork targets DSH 0.2.1-rc.1 or newer in the 0.2.x series and Node.js >=24.9.0. Profile configuration is TOML; the bundled Host code is plain JavaScript and must not require an install-time build.
 
 ```sh
-pnpm install
-pnpm test
+npm install --ignore-scripts --legacy-peer-deps
+npm run check
+npm pack --dry-run
 ```
 
-Keep English and Chinese README changes synchronized. Do not commit credentials, local DSH settings, `node_modules`, or session data.
+Keep both README languages updated, include regression tests for runtime or validation changes, and preserve the official DSH Subagent lifecycle and `subagent_fork` behavior. Never commit credentials, user Profiles, session data, or `node_modules/`.
 
-For behavior changes, include focused regression coverage and explain the user-visible effect in the pull request.
+The repository's GitHub Issues feature was disabled when the v0.1.0 backlog was recorded; see `docs/issues/` for pending issue drafts.

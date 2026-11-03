@@ -1,4 +1,5 @@
-# Adds the configurable fast/reviewer subagent profile manager.
+# The built-in tool-subagent row remains installed. This Host plugin shadows
+# only its model-facing `subagent` tool in root Agent scopes; unload restores it.
 - insert:
     - id: dsh-subagent
       name: dsh-subagent
