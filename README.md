@@ -4,7 +4,11 @@
 
 This fork provides one `subagent` tool with a required named TOML profile. Profiles fix the model route, role instructions and tool policy; DSH owns child execution, messaging and completion. The old per-profile tool UI is not included.
 
-The current source and automated compatibility target is DSH `0.2.2-rc.1` with Node.js `>=24.9.0`. Paid model-backed child completion and a real Desktop UI acceptance pass are separate from those checks.
+Requires Node.js `>=24.9.0`.
+
+## Compatibility
+
+Verified: DSH 0.2.2-rc.1 (source review and automated checks); Desktop testing has not been completed.
 
 ## Install
 
