@@ -20,7 +20,7 @@
   },
   "files": [
     "index.js", "profile-core.js", "profile-runtime.js", "profile-store.js",
-    "cordis.patch.yml", "README.md", "README.zh.md", "LICENSE",
+    "cordis.patch.yml", "README.md", "README.zh.md", "docs", "CONTRIBUTING.md", "LICENSE",
     "locale/en.json", "locale/zh.json", "icon.svg"
   ],
   "dsh": { "bundle": { "patch": "./cordis.patch.yml" } },

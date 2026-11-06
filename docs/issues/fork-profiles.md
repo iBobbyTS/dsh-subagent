@@ -10,8 +10,8 @@ The official `subagent_fork` currently inherits the parent's completed conversat
 
 Add optional named Profile selection for Fork only when official DSH supports a child-specific persona and tool/Skill policy without reimplementing Fork lifecycle. Omitted Profile must remain backward-compatible with official `subagent_fork`. Profile selection should preserve the parent's completed-turn seed and record the selected child policy for cold resume. Never silently expand permission, and document possible KV-cache reuse degradation.
 
-## Current v0.1.0 behavior
+## Historical v0.1.0 baseline
 
-Leave the official `subagent_fork` untouched, along with `send_message`, `list_agents`, `interrupt_agent`, and other control tools.
+The original v0.1.0 baseline left `subagent_fork` untouched. The current implementation hides the root Agent's inherited fork entry while Profile-aware fork routing remains deferred; messaging and other control tools remain native. See [current scope and lifecycle](../profiles.md#scope-and-lifecycle).
 
 Relevant DSH sources: `packages/subagent/subagent-fork-in-process/src/index.ts`, `packages/subagent/tool-subagent/src/preset-selection.ts`.

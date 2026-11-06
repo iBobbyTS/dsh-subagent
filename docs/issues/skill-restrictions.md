@@ -10,8 +10,8 @@ Subagent Profiles have `skill_whitelist` and `skill_blacklist` fields, but DSH's
 
 Implement the two fields only when DSH exposes a native Agent-scoped Skill restriction across discovery, loading, and model invocation, with predictable behavior for explicitly user-invoked Skills. Enforce restrictions before a child's first step and on cold resume; validate missing names. Do not reimplement the Skill lifecycle or create a shadow Skill registry.
 
-## Current v0.1.0 behavior
+## Historical v0.1.0 baseline
 
-Empty Skill arrays are accepted as no restrictions. Nonempty arrays make the Profile invalid with `UNSUPPORTED_SKILL_FILTER`, so no child can be spawned under an unenforced policy.
+Empty Skill arrays were accepted as no restrictions; nonempty arrays made the Profile invalid with `UNSUPPORTED_SKILL_FILTER`. This limitation still applies; [current profile behavior](../profiles.md#validation-errors-and-recovery) is the maintained reference.
 
 Relevant DSH sources: `packages/skill/skill/src/index.ts`, `packages/skill/tool-skill/src/index.ts`.
