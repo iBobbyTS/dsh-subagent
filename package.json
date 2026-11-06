@@ -42,7 +42,8 @@
     }
   },
   "dependencies": {
-    "@iarna/toml": "^2.2.5"
+    "@iarna/toml": "^2.2.5",
+    "zod": "4.4.3"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "4.1.0",
@@ -59,13 +60,18 @@
     "tsdown": "0.22.14",
     "typescript": "5.9.3",
     "yaml": "2.8.1",
-    "zod": "4.4.3"
+    "@deepseek-ai/dsh-storage-domain": "0.2.2-rc.1",
+    "@deepseek-ai/schemastery": "3.19.0",
+    "@deepseek-ai/node-addon-system": "0.1.2",
+    "p-limit": "7.3.3"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": ">=4.0.6-alpha.2 <5",
     "@deepseek-ai/dsh-home-paths": ">=0.2.2-alpha.3 <0.3.0",
     "@deepseek-ai/dsh-subagent": ">=0.2.2-alpha.3 <0.3.0",
-    "@deepseek-ai/dsh-tools": ">=0.2.2-alpha.3 <0.3.0"
+    "@deepseek-ai/dsh-tools": ">=0.2.2-alpha.3 <0.3.0",
+    "@deepseek-ai/dsh-storage-domain": "0.2.2-rc.1",
+    "@deepseek-ai/schemastery": "^3.19.0"
   },
   "scripts": {
     "test": "node scripts/check.mjs test",

@@ -1,0 +1,33 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdirSync, mkdtempSync, writeFileSync, unlinkSync, symlinkSync } from 'node:fs';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { readProfile, listProfiles } from '../lib/profile-store.js';
+import { listProfilesTool } from '../lib/index.js';
+
+test('discovery reads descriptions without route or tool validation; spawn reads only selected file', async () => {
+  const base = fileURLToPath(new URL('../.agent-work/tmp/profile-retention/', import.meta.url));
+  mkdirSync(base, { recursive: true });
+  const home = mkdtempSync(join(base, 'profiles-'));
+  writeFileSync(join(home, 'reader.toml'), 'description="Reads code"\nmodel=123\ntool_whitelist=["unknown"]');
+  writeFileSync(join(home, 'broken.toml'), 'not valid [');
+  const listed = listProfiles(home);
+  assert.equal(listed.profiles.get('reader').description, 'Reads code');
+  assert.equal(listed.diagnostics.get('broken').code, 'TOML_PARSE_ERROR');
+  assert.throws(() => readProfile(home, 'reader'), error => error.code === 'MISSING_REQUIRED_FIELD');
+  const route = 'provider="fixture"\nmodel="first"\nreasoning_effort="high"\n';
+  writeFileSync(join(home, 'reader.toml'), route);
+  assert.equal(readProfile(home, 'reader').model, 'first');
+  writeFileSync(join(home, 'reader.toml'), route.replace('first', 'second'));
+  assert.equal(readProfile(home, 'reader').model, 'second');
+  writeFileSync(join(home, 'late.toml'), 'description="Newly added"');
+  const tool = listProfilesTool(() => listProfiles(home));
+  assert.match(await tool.execute({}, {}), /late: Newly added/);
+  assert.equal(listed.profiles.has('late'), false, 'the previously injected catalog is not a live directory view');
+  unlinkSync(join(home, 'reader.toml'));
+  assert.throws(() => readProfile(home, 'reader'), error => error.code === 'PROFILE_NOT_FOUND');
+  assert.throws(() => readProfile(home, '../escape'), error => error.code === 'INVALID_PROFILE_NAME');
+  symlinkSync(join(home, 'late.toml'), join(home, 'link.toml'));
+  assert.throws(() => readProfile(home, 'link'), error => error.code === 'INVALID_PROFILE_FILE');
+});

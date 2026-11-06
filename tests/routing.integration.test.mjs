@@ -29,6 +29,9 @@ test('Host plugin shadows real source delegation definitions without rewriting p
   const previousHome = process.env.DSH_HOME;
   process.env.DSH_HOME = home;
   const ctx = new Context();
+  const { default: Storage } = await runtime.load('@deepseek-ai/dsh-storage');
+  const JsonStorage = await runtime.load('@deepseek-ai/dsh-storage-json');
+  const Domain = await runtime.load('@deepseek-ai/dsh-storage-domain');
   const roots = [];
   const agents = [];
   const scopes = [];
@@ -63,8 +66,11 @@ test('Host plugin shadows real source delegation definitions without rewriting p
   }
   try {
     for (const service of [Prompt, Tools, Agents, Projections, Llm, Subagents]) await ctx.plugin(service);
+    await ctx.plugin(Storage);
+    await ctx.plugin(JsonStorage, { root: join(home, 'storage') });
+    await ctx.plugin(Domain, { backend: 'json' });
     await ctx.plugin(executor);
-    const owner = ctx.inject(['tools', 'systemPrompt', 'subagents', 'sessionProjections'], () => {});
+    const owner = ctx.inject(['tools', 'systemPrompt', 'subagents', 'sessionProjections', 'storageDomain'], () => {});
     await owner;
     const host = owner.ctx;
     const presetKey = {};
@@ -79,8 +85,8 @@ test('Host plugin shadows real source delegation definitions without rewriting p
     }
     preset.ctx.systemPrompt.section({ name: 'deployment:persona-prefix', order: -100, text: 'Existing persona prefix' });
     preset.ctx.systemPrompt.section({ name: 'deployment:persona-suffix', order: 1000, text: 'Creator source context must survive' });
-    function agent(isRoot, label) {
-      const value = { id: randomUUID() };
+    function agent(isRoot, label, id = randomUUID()) {
+      const value = { id, options: {} };
       const scope = createScope(host, value, { parent: presetKey });
       value.ctx = scope.ctx;
       value.session = { header: { id: value.id, origin: isRoot ? 'user' : 'subagent' }, snapshotEvents: () => label ? [{ type: 'subagent/descriptor', data: { label } }] : [] };
@@ -112,7 +118,7 @@ test('Host plugin shadows real source delegation definitions without rewriting p
     const unrelatedChild = agent(false);
     const original = host.tools.get('subagent', existing);
     const fork = host.tools.get('subagent_fork', existing);
-    const neighbors = new Map(['send_message', 'list_agents', 'interrupt_agent', 'workflow', 'third_party_tool', 'list_subagent_models']
+    const neighbors = new Map(['send_message', 'list_agents', 'interrupt_agent', 'workflow', 'third_party_tool']
       .map(name => [name, host.tools.get(name, existing)]));
     const persona = async value => (await host.systemPrompt.assemble({ scope: value })).sections
       .filter(section => section.name.startsWith('deployment:persona-'));
@@ -124,6 +130,8 @@ test('Host plugin shadows real source delegation definitions without rewriting p
         assert.notEqual(host.tools.get('subagent', existing), original);
         assert.deepEqual(host.tools.schemas(existing).find(tool => tool.name === 'subagent').parameters.required, ['profile', 'prompt']);
         assert.equal(host.tools.get('subagent_fork', existing), undefined);
+        assert.equal(host.tools.get('list_subagent_models', existing), undefined);
+        assert.ok(host.tools.get('list_subagent_profiles', existing));
         assert.equal(host.tools.get('subagent', unrelatedChild), original);
         assert.equal(host.tools.get('subagent_fork', unrelatedChild), fork);
         assert.deepEqual(await persona(existing), before);
@@ -138,12 +146,12 @@ test('Host plugin shadows real source delegation definitions without rewriting p
         assert.equal(result.value.subagentId, accepted.childId);
         assert.equal(accepted.request.agentOptions.model, 'fixture');
         assert.equal(accepted.request.cwd, '/workspace/child');
-        assert.match(accepted.label, /^\[dsh-profile:reader:/);
+        assert.equal(accepted.label, '[dsh-profile:reader] Inspect source');
         // A descriptor-bearing child uses the same shared preset, not the root's
         // local fork mask. Profile policy still protects its communication tool.
         const profile = validateProfile('reader', { provider: 'fixture', model: 'fixture', reasoning_effort: 'high',
           tool_whitelist: ['read'], developer_instruction: 'Read-only child instructions' });
-        const child = agent(false, profileLabel(profile, 'Inspect'));
+        const child = agent(false, accepted.label, accepted.childId);
         await host.serial(scopeTarget(child, child), 'agent/created', { agent: child });
         assert.ok(host.tools.get('send_message', child));
         assert.equal(host.tools.get('third_party_tool', child), undefined);
@@ -152,17 +160,18 @@ test('Host plugin shadows real source delegation definitions without rewriting p
           const policy = validateProfile(name, { provider: 'fixture', model: 'fixture', reasoning_effort: 'high',
             ...(name === 'denyfork' ? { tool_blacklist: ['subagent_fork'] } : { tool_whitelist: ['read', 'subagent_fork'] }) });
           const load = () => ({ profiles: new Map([[name, policy]]), diagnostics: new Map() });
-          const state = await plugin.validatedCatalog({ llm: { listProviders: () => [{ id: 'fixture' }], resolveCallConfig: async () => ({}) } }, existing, load);
+          const state = (await import('../lib/profile-store.js')).listProfiles(join(home, 'agents'));
           assert.ok(state.profiles.has(name), 'root fork hiding must not invalidate child filters');
           const started = await executeModelToolFixture(existing.ctx, { callId: randomUUID(), name: 'subagent',
             arguments: { profile: name, prompt: 'Check child fork policy' }, agent: existing, signal: new AbortController().signal });
           assert.equal(started.isError, false, JSON.stringify(started));
-          const filteredChild = agent(false, profileLabel(policy, 'Check'));
+          const filteredChild = agent(false, accepted.label, accepted.childId);
           await host.serial(scopeTarget(filteredChild, filteredChild), 'agent/created', { agent: filteredChild });
           assert.equal(host.tools.get('subagent_fork', filteredChild) !== undefined, name === 'allowfork');
           assert.ok(host.tools.get('send_message', filteredChild));
           if (name === 'allowfork') {
             const unavailable = agent(false, profileLabel(policy, 'Unavailable fork'));
+            await host.storageDomain.get('dsh_subagent_policies').table('children').put(unavailable.id, { policy, lastUsedAt: Date.now() });
             unavailable.ctx.tools.restrict({ deny: ['subagent_fork'] });
             await assert.rejects(() => host.serial(scopeTarget(unavailable, unavailable), 'agent/created', { agent: unavailable }),
               error => error.code === 'TOOL_NOT_FOUND');

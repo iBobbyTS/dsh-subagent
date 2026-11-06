@@ -31,17 +31,12 @@ test('current source preserves protected tools, catalog diagnostics and native s
       output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] },
       execute: async () => name,
     }));
-    await t.test('catalog shows protected blacklist errors before spawn', async () => {
+    await t.test('discovery lists descriptions without enforcing spawn-time tool policies', async () => {
       const directory = fileURLToPath(new URL('./fixtures/protected-tools/', import.meta.url));
-      const state = await catalog.validatedCatalog({ tools: testCtx.tools,
-        llm: { listProviders: () => [{ id: 'openai-codex' }], resolveCallConfig: async () => ({}) },
-      }, { ctx: { tools: testCtx.tools } }, () => scanProfiles(directory));
-      assert.deepEqual([...state.profiles.keys()], ['reader']);
-      const text = catalog.profileCatalogText(state);
-      for (const name of ['blocked-message', 'blocked-structured']) {
-        assert.equal(state.diagnostics.get(name).code, 'PROTECTED_TOOL_BLACKLIST');
-        assert.ok(text.includes(`${name}: [PROTECTED_TOOL_BLACKLIST]`));
-      }
+      const { listProfiles } = await import('../lib/profile-store.js');
+      const state = listProfiles(directory);
+      for (const name of ['reader', 'blocked-message', 'blocked-structured']) assert.ok(state.profiles.has(name));
+      assert.equal(state.diagnostics.size, 0);
     });
     const schema = { type: 'object', properties: { answer: { type: 'string' } }, required: ['answer'], additionalProperties: false };
     for (const timing of ['before', 'after']) {

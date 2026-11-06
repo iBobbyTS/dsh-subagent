@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { sourceRuntime } from './source-runtime.mjs';
+import { memoryPolicies } from './policy-fixture.mjs';
 import { spawnProfiled } from '../lib/profile-runtime.js';
 
 const root = process.env.DSH_TEST_SOURCE_ROOT;
@@ -18,13 +19,13 @@ test('profiled spawn satisfies the actual release activation method', { skip: !r
       assertCapabilities: (_provider, request) => assert.equal(request.agentOptions.model, 'model'),
       requireManager: () => ({ startLocal: async spec => { accepted = spec; return { childId: spec.childId }; } }),
     };
-    const ctx = {
+    const ctx = { root: { on: () => () => {} }, logger: { warn() {} },
       llm: { listProviders: () => [{ id: 'fixture' }], resolveCallConfig: async () => ({}) },
       subagents: { getProvider: () => backend, resolveMaxDepth: () => 2,
         startActivation: spec => SubagentRuntime.prototype.startActivation.call(native, spec) },
     };
     const result = await spawnProfiled({ ctx, agent, args: { profile: 'fixture', prompt: 'Inspect', cwd: '/tmp' },
-      load: () => ({ profiles: new Map([['fixture', profile]]), diagnostics: new Map() }), pending: new Map(), signal: new AbortController().signal });
+      read: () => profile, store: memoryPolicies().store, signal: new AbortController().signal });
     assert.equal(result.subagentId, accepted.childId);
     assert.equal(accepted.request.parent, agent);
     assert.equal(accepted.request.cwd, '/tmp');

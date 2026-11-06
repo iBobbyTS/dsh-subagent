@@ -15,6 +15,8 @@ export function sourceRuntime(root) {
   const paths = Object.entries(parsed.config.compilerOptions.paths).sort(([a], [b]) => b.length - a.length);
   const external = [createRequire(import.meta.url), ...(process.env.DSH_TEST_EXTERNAL_ANCHOR
     ? [createRequire(resolve(process.env.DSH_TEST_EXTERNAL_ANCHOR))] : [])];
+  // Native optional binaries are installed under their entry package, not hoisted at the fixture root.
+  external.push(createRequire(external[0].resolve('@deepseek-ai/node-addon-system/package.json')));
   function sourcePath(specifier) {
     for (const [pattern, candidates] of paths) {
       const star = pattern.indexOf('*');
@@ -37,7 +39,9 @@ export function sourceRuntime(root) {
       if (resolvingExternal) return nextResolve(specifier, context);
       const source = sourcePath(specifier);
       if (source) return nextResolve(source, context);
-      if (specifier.startsWith('@deepseek-ai/')) throw new Error(`Unmapped source package: ${specifier}`);
+      // The POSIX flock primitive is a prebuilt native binary, not an installed DSH runtime substitute.
+      const nativeBinary = /^@deepseek-ai\/node-addon-system-(?:darwin|linux)-(?:arm64|x64)\/package[.]json$/.test(specifier);
+      if (specifier.startsWith('@deepseek-ai/') && !nativeBinary) throw new Error(`Unmapped source package: ${specifier}`);
       try { return nextResolve(specifier, context); }
       catch (error) {
         if (specifier.startsWith('.') || specifier.startsWith('/') || specifier.includes(':')) throw error;
@@ -51,6 +55,7 @@ export function sourceRuntime(root) {
           }
           if (!resolved) throw failure;
         } finally { resolvingExternal = false; }
+        if (nativeBinary) return { url: pathToFileURL(resolved).href, shortCircuit: true };
         return nextResolve(pathToFileURL(resolved).href, context);
       }
     },

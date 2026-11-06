@@ -2,27 +2,35 @@ import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { cpSync, existsSync, globSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, statSync } from 'node:fs'
 import { dirname, join, relative, resolve } from 'node:path'
-import { tmpdir } from 'node:os'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { runInNewContext } from 'node:vm'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const mode = process.argv[2] ?? 'all'
 assert.ok(['all', 'test', 'dist'].includes(mode), 'expected all, test or dist')
-function run(command, args, cwd) { execFileSync(command, args, { cwd, stdio: 'inherit' }) }
+function run(command, args, cwd) {
+ const manager = command === 'pnpm' && process.env.npm_execpath?.includes('pnpm') ? process.env.npm_execpath : undefined
+ execFileSync(manager ? process.execPath : command, manager ? [manager, ...args] : args, { cwd, stdio: 'inherit' })
+}
 function files(dir) {
  if (!existsSync(dir)) return []
  return readdirSync(dir, { withFileTypes: true }).filter(entry => entry.name !== '.DS_Store').flatMap(entry => entry.isDirectory()
    ? files(join(dir, entry.name)).map(path => entry.name + '/' + path) : [entry.name]).sort()
 }
 if (mode === 'all') run('pnpm', ['typecheck'], root)
-const scratch = mkdtempSync(join(tmpdir(), 'dsh-check-'))
+const scratchRoot = join(root, '.agent-work', 'tmp', 'distribution-check')
+mkdirSync(scratchRoot, { recursive: true })
+const scratch = mkdtempSync(join(scratchRoot, 'candidate-'))
 const candidate = join(scratch, 'candidate')
 try {
- cpSync(root, candidate, { recursive: true, filter: path => {
+ mkdirSync(candidate)
+ for (const name of readdirSync(root)) {
+ if (['.git', 'node_modules', '.build', '.agent-work', '.harness-contract', '.probe', '.pnpm-store', 'lib', '.DS_Store'].includes(name)) continue
+ cpSync(join(root, name), join(candidate, name), { recursive: true, filter: path => {
    const top = relative(root, path).split('/')[0]
-   return !relative(root, path).split('/').includes('.DS_Store') && !['.git', 'node_modules', '.build', '.agent-work', '.harness-contract', '.probe', 'lib', '.DS_Store'].includes(top)
+   return !relative(root, path).split('/').includes('.DS_Store') && !['.git', 'node_modules', '.build', '.agent-work', '.harness-contract', '.probe', '.pnpm-store', 'lib', '.DS_Store'].includes(top)
  } })
+ }
  symlinkSync(join(root, 'node_modules'), join(candidate, 'node_modules'), 'dir')
  run(process.execPath, ['scripts/build-runtime.mjs'], candidate)
  if (mode !== 'dist') {
@@ -98,4 +106,4 @@ try {
    assert.equal(typeof (await import(pathToFileURL(join(gitInstall, 'node_modules', pkg.name, pkg.main)).href)).apply, 'function')
    console.log('PASS: complete dist, packed exports/resources/maps, clean tarball/Git installation and Host load')
  }
-} finally { rmSync(scratch, { recursive: true, force: true }) }
+} finally { rmSync(scratch, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }) }

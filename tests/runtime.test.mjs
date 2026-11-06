@@ -1,113 +1,84 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { validateProfile, ProfileError, parseProfileLabel, profileLabel } from '../lib/profile-core.js';
-import { spawnProfiled, resolveChildProfile, installChildPolicy, installRootRouting, profileIdentityFromSession } from '../lib/profile-runtime.js';
-import { scanProfiles } from '../lib/profile-store.js';
-import { fileURLToPath } from 'node:url';
+import { validateProfile, ProfileError, profileLabel } from '../lib/profile-core.js';
+import { spawnProfiled, installChildPolicy, installRootRouting, profileIdentityFromSession, profilePolicy, ensureChildPolicy } from '../lib/profile-runtime.js';
+import { memoryPolicies } from './policy-fixture.mjs';
 
-const p = validateProfile('explorer', {
-  provider: 'openai-codex', model: 'gpt-6-luna', reasoning_effort: 'xhigh',
-  description: 'Explore the codebase',
-  developer_instruction: 'Explore only, do not edit.',
-  tool_whitelist: ['read', 'grep'],
-});
-const load = () => ({ profiles: new Map([['explorer', p]]), diagnostics: new Map() });
+const p = validateProfile('explorer', { provider: 'fixture', model: 'model', reasoning_effort: 'high',
+  description: 'Explore', developer_instruction: 'Explore only.', tool_whitelist: ['read', 'grep'] });
 const signal = new AbortController().signal;
-const fakeTools = () => ({
-  schemas: () => [{ name: 'read' }, { name: 'grep' }, { name: 'edit' }, { name: 'subagent' }, { name: 'send_message' }],
-  restrict: (filter) => { assert.deepEqual(filter.allow, ['read', 'grep', 'send_message']); fakeTools.restricted = true; },
-});
-const agent = { ctx: { tools: fakeTools(), systemPrompt: {
-  getSectionOrder: () => 100,
-  section: (section) => { agent.injectedSection = section; },
-} }, session: { header: { id: 'parent' } } };
-
-function baseContext(overrides = {}) {
-  return {
-    llm: { listProviders: () => [{ id: 'openai-codex' }], resolveCallConfig: async () => ({}) },
-    subagents: {
-      getProvider: () => ({ inheritsParentContext: false, capabilities: { agentOptions: true }, prepareContinuable: async () => ({}) }),
-      resolveMaxDepth: () => 2,
-      startActivation: async (spec) => ({ childId: spec.childId }),
-    },
-    ...overrides,
-  };
+const agent = { id: 'parent', ctx: { tools: { schemas: () => ['read', 'grep', 'edit', 'send_message'].map(name => ({ name })) } } };
+function context(start = async spec => ({ childId: spec.childId })) {
+  const listeners = new Set();
+  return { listeners, root: { on: (_event, handler) => { listeners.add(handler); return () => listeners.delete(handler); } },
+    logger: { warn() {} }, llm: { listProviders: () => [{ id: 'fixture' }], resolveCallConfig: async () => ({}) },
+    subagents: { getProvider: () => ({ inheritsParentContext: false, capabilities: { agentOptions: true }, prepareContinuable() {} }),
+      resolveMaxDepth: () => 2, startActivation: start } };
 }
 
-test('spawn uses exact fixed route and official activation; preserves pending child identity', async () => {
-  const pending = new Map();
+ test('each spawn reads its selected profile and saves only immutable child policy', async () => {
+  const { store, records } = memoryPolicies();
   let seen;
-  const ctx = baseContext({ subagents: {
-    getProvider: () => ({ inheritsParentContext: false, capabilities: { agentOptions: true }, prepareContinuable: async () => ({}) }),
-    resolveMaxDepth: () => 2,
-    startActivation: async (spec) => {
-      seen = spec;
-      assert.equal(pending.get(spec.childId), p);
-      const resume = { header: { origin: 'subagent', id: spec.childId }, snapshotEvents: () => [
-        { type: 'subagent/descriptor', data: { label: spec.label } },
-      ] };
-      assert.equal(resolveChildProfile(resume, pending, load), p);
-      return { childId: spec.childId };
-    },
-  } });
-  const result = await spawnProfiled({ ctx, agent, args: {
-    profile: 'explorer', prompt: 'Trace auth functions', description: 'Investigate login',
-  }, pending, load, signal });
-  assert.equal(result.kind, 'activation');
-  assert.equal(result.subagentId, seen.childId);
-  assert.equal(seen.provider, 'spawn');
-  assert.equal(seen.delivery, 'parent');
-  assert.equal(seen.parent, undefined, 'task options belong to request on rc.1');
-  assert.equal(seen.request.parent, agent);
-  assert.equal(seen.request.maxDepth, 2);
-  assert.equal(seen.request.agentOptions.provider, 'openai-codex');
-  assert.equal(seen.request.agentOptions.model, 'gpt-6-luna');
-  assert.equal(seen.request.agentOptions.reasoningEffort, 'xhigh');
-  assert.equal(seen.request.prompt[0].text, 'Trace auth functions');
-  assert.equal(pending.size, 0);
-});
-
-test('child descriptor permits cold resume and refuses drifted Profile', () => {
-  const label = '[dsh-profile:explorer:';
-  const runtimeLabel = (() => {
-    let stored;
-    const pending = new Map();
-    return import('../lib/profile-core.js').then(({ profileLabel }) => profileLabel(p, 'Inspect login'));
-  })();
-  return runtimeLabel.then(text => {
-    assert.ok(text.startsWith(label));
-    const session = { header: { id: 'child-1', origin: 'subagent' }, snapshotEvents: () => [
-      { type: 'subagent/descriptor', data: { label: text } },
-    ] };
-    assert.deepEqual(profileIdentityFromSession(session), parseProfileLabel(text));
-    assert.equal(resolveChildProfile(session, new Map(), load), p);
-    const changed = validateProfile('explorer', {
-      provider: 'openai-codex', model: 'other', reasoning_effort: 'xhigh',
-    });
-    assert.throws(() => resolveChildProfile(session, new Map(), () => ({
-      profiles: new Map([['explorer', changed]]), diagnostics: new Map(),
-    })), error => error.code === 'PROFILE_CHANGED');
+  const ctx = context(async spec => {
+    seen = spec;
+    assert.deepEqual(store.restore(spec.childId), profilePolicy(p));
+    return { childId: spec.childId };
   });
+  let reads = 0;
+  const read = name => { assert.equal(name, 'explorer'); reads++; return p; };
+  const result = await spawnProfiled({ ctx, agent, args: { profile: 'explorer', prompt: 'Trace auth', cwd: '/workspace' }, read, store, signal });
+  assert.equal(result.subagentId, seen.childId);
+  assert.equal(seen.request.parent, agent);
+  assert.equal(seen.parent, undefined);
+  assert.equal(seen.request.maxDepth, 2);
+  assert.deepEqual(seen.request.agentOptions, { provider: 'fixture', model: 'model', reasoningEffort: 'high' });
+  assert.equal(seen.label, '[dsh-profile:explorer] Trace auth');
+  assert.equal(ctx.listeners.size, 0);
+  assert.equal(records.size, 1);
+  await spawnProfiled({ ctx, agent, args: { profile: 'explorer', prompt: 'Again' }, read, store, signal });
+  assert.equal(reads, 2);
 });
 
-test('fork identity excludes inherited descriptors and preserves its own descriptor', () => {
-  const own = validateProfile('own-role', { provider: p.provider, model: p.model, reasoning_effort: 'high' });
-  const inherited = { seq: 0, type: 'subagent/descriptor', data: { label: profileLabel(p, 'Ancestor') } };
-  const marker = { seq: 1, type: 'session/end-seed', data: { inherited: true } };
-  const events = [inherited, marker, { seq: 2, type: 'subagent/descriptor', data: { label: 'Native fork' } }];
-  const session = { header: { id: 'fork-child', origin: 'subagent', isSeeded: true }, inheritedEventCount: 1,
-    snapshotEvents: (from = 0) => events.slice(from) };
+test('failed activation keeps its cause and releases its snapshot and initializer', async () => {
+  const { store, records } = memoryPolicies();
+  const ctx = context(async () => { throw Object.assign(new Error('depth exceeded'), { code: 'MAX_DEPTH' }); });
+  await assert.rejects(() => spawnProfiled({ ctx, agent, args: { profile: 'explorer', prompt: 'work' }, read: () => p, store, signal }),
+    error => error.code === 'SPAWN_FAILED' && error.cause.code === 'MAX_DEPTH' && error.message.includes('MAX_DEPTH'));
+  assert.equal(records.size, 0);
+  assert.equal(ctx.listeners.size, 0);
+});
+
+test('bad profiles and unavailable messaging never reach activation', async () => {
+  const { store } = memoryPolicies();
+  const ctx = context(() => assert.fail('must not start'));
+  const read = name => { throw new ProfileError('PROFILE_NOT_FOUND', name); };
+  for (const args of [{ prompt: 'work' }, { profile: 'missing', prompt: 'work' }]) {
+    await assert.rejects(() => spawnProfiled({ ctx, agent, args, read, store, signal }), error => ['PROFILE_REQUIRED', 'PROFILE_NOT_FOUND'].includes(error.code));
+  }
+  await assert.rejects(() => spawnProfiled({ ctx, agent: { ctx: { tools: { schemas: () => [] } } },
+    args: { profile: 'explorer', prompt: 'work' }, read: () => p, store, signal }), error => error.code === 'REQUIRED_TOOL_UNAVAILABLE');
+});
+
+test('depth configuration uses the native resolver including provider-managed and zero', async () => {
+  for (const limit of [undefined, 0, 3, 'provider-managed']) {
+    const ctx = context(async spec => {
+      const cap = limit === 'provider-managed' ? undefined : limit;
+      assert.equal(spec.request.maxDepth, cap);
+      assert.equal(Object.hasOwn(spec.request, 'maxDepth'), cap !== undefined);
+      return { childId: spec.childId };
+    });
+    ctx.subagents.resolveMaxDepth = configured => { assert.equal(configured, limit); return configured === 'provider-managed' ? undefined : configured; };
+    await spawnProfiled({ ctx, agent, args: { profile: 'explorer', prompt: 'work' }, read: () => p, store: memoryPolicies().store, signal, maxDepth: limit });
+  }
+});
+
+test('identity reads only the own descriptor, not an inherited ancestor', () => {
+  const events = [{ type: 'subagent/descriptor', data: { label: profileLabel(p, 'Ancestor') } },
+    { type: 'session/end-seed' }, { type: 'subagent/descriptor', data: { label: 'Unrelated native child' } }];
+  const session = { header: { origin: 'subagent' }, inheritedEventCount: 1, snapshotEvents: from => events.slice(from) };
   assert.equal(profileIdentityFromSession(session), undefined);
-  assert.equal(resolveChildProfile(session, new Map(), () => assert.fail('native fork must not reload ancestor profiles')), undefined);
-
-  events[2] = { seq: 2, type: 'subagent/descriptor', data: { label: profileLabel(own, 'Own identity') } };
-  const catalog = () => ({ profiles: new Map([[own.name, own]]), diagnostics: new Map() });
-  assert.equal(resolveChildProfile(session, new Map(), catalog), own, 'cold resume uses the own descriptor even when the ancestor profile is gone');
-  const pending = new Map([[session.header.id, own]]);
-  assert.equal(resolveChildProfile(session, pending, catalog), own, 'fresh creation keeps its pending own identity');
-
-  events.splice(2);
-  assert.equal(profileIdentityFromSession(session), undefined, 'an inherited descriptor alone establishes no child profile');
+  events[2].data.label = profileLabel(p, 'Own');
+  assert.deepEqual(profileIdentityFromSession(session), { name: p.name });
 });
 
 test('child instructions are scoped to child, not the main-agent schema', () => {
@@ -157,89 +128,32 @@ test('missing messaging in child view fails closed even without profile filters'
   assert.throws(() => installChildPolicy(child, profile), error => error.code === 'REQUIRED_TOOL_UNAVAILABLE');
 });
 
-test('blacklisted protected tools appear as scan diagnostics and never reach model preflight or native spawn', async () => {
-  const directory = fileURLToPath(new URL('./fixtures/protected-tools/', import.meta.url));
-  const scanned = scanProfiles(directory);
-  assert.deepEqual([...scanned.profiles.keys()], ['reader']);
-  for (const name of ['blocked-message', 'blocked-structured']) {
-    const error = scanned.diagnostics.get(name);
-    assert.equal(error.code, 'PROTECTED_TOOL_BLACKLIST');
-    const ctx = { llm: { listProviders: () => assert.fail('invalid profile reached route preflight') },
-      subagents: { startActivation: () => assert.fail('invalid profile reached native spawn') } };
-    const pending = new Map();
-    await assert.rejects(() => spawnProfiled({ ctx, agent, args: { profile: name, prompt: 'work' },
-      load: () => scanned, pending, signal }), caught => caught === error);
-    assert.equal(pending.size, 0);
-  }
+test('policy initialization is child-owned and happens only once', () => {
+  let installs = 0;
+  const child = { ctx: { tools: { schemas: () => [{ name: 'send_message' }], restrict: () => installs++ } } };
+  const policy = { name: 'role', tool_whitelist: [] };
+  ensureChildPolicy(child, policy);
+  ensureChildPolicy(child, { name: 'different', tool_whitelist: ['read'] });
+  assert.equal(installs, 1);
 });
 
-test('missing messaging in parent view blocks spawn before backend activation', async () => {
-  const parent = { ctx: { tools: { schemas: () => [{ name: 'read' }, { name: 'grep' }] } } };
-  const ctx = baseContext({ subagents: { startActivation: () => assert.fail('missing communication must block spawn') } });
-  await assert.rejects(() => spawnProfiled({ ctx, agent: parent, args: { profile: 'explorer', prompt: 'work' },
-    load, pending: new Map(), signal }), error => error.code === 'REQUIRED_TOOL_UNAVAILABLE');
+test('root masks fork and model discovery independently, restores exactly once', () => {
+  const actions = [];
+  const root = { ctx: { on: () => () => {}, tools: {
+    get: name => ['subagent_fork', 'list_subagent_models'].includes(name) ? {} : undefined,
+    register: definition => { actions.push('register:' + definition.name); return () => actions.push('remove:' + definition.name); },
+    restrict: filter => { actions.push('deny:' + filter.deny[0]); return () => actions.push('allow:' + filter.deny[0]); },
+  } } };
+  const dispose = installRootRouting(root, { name: 'subagent' }, { name: 'list_subagent_profiles' });
+  dispose(); dispose();
+  assert.deepEqual(actions, ['register:subagent', 'register:list_subagent_profiles', 'deny:subagent_fork', 'deny:list_subagent_models',
+    'allow:list_subagent_models', 'allow:subagent_fork', 'remove:list_subagent_profiles', 'remove:subagent']);
 });
 
-test('unknown or malformed profile errors are returned to caller, not silently substituted', async () => {
-  const ctx = baseContext();
-  const pending = new Map();
-  for (const args of [{ prompt: 'hello' }, { profile: 'missing', prompt: 'hello' }]) {
-    await assert.rejects(() => spawnProfiled({ ctx, agent, args, load, pending, signal }),
-      error => error instanceof ProfileError && ['PROFILE_REQUIRED', 'PROFILE_NOT_FOUND'].includes(error.code));
-  }
-});
-
-test('official activation failures preserve the meaningful cause and code', async () => {
-  const ctx = baseContext({ subagents: {
-    getProvider: () => ({ inheritsParentContext: false, capabilities: { agentOptions: true }, prepareContinuable: async () => ({}) }),
-    resolveMaxDepth: () => 2,
-    startActivation: async () => { throw new Error('Active subagent limit reached'); },
-  } });
-  const pending = new Map();
-  await assert.rejects(() => spawnProfiled({ ctx, agent, args: { profile: 'explorer', prompt: 'work' }, load, pending, signal }),
-    e => e instanceof ProfileError && e.code === 'SPAWN_FAILED' && /limit/.test(e.message));
-  assert.equal(pending.size, 0);
-});
-
-test('root routing hides fork when present and restores both effects exactly once', () => {
-  for (const hasFork of [false, true]) {
-    const actions = [];
-    const root = { ctx: { on: () => () => {}, tools: {
-      get: (name, scope) => { assert.equal(name, 'subagent_fork'); assert.equal(scope, root); return hasFork ? {} : undefined; },
-      register: definition => { assert.equal(definition.name, 'subagent'); actions.push('register'); return () => actions.push('unregister'); },
-      restrict: filter => { assert.deepEqual(filter, { deny: ['subagent_fork'] }); actions.push('restrict'); return () => actions.push('unrestrict'); },
-    } } };
-    const dispose = installRootRouting(root, { name: 'subagent' });
-    dispose();
-    dispose();
-    assert.deepEqual(actions, hasFork ? ['register', 'restrict', 'unrestrict', 'unregister'] : ['register', 'unregister']);
-  }
-});
-
-test('failed root restriction rolls back registration without removing another owner', () => {
+test('partial root setup failure rolls back without changing ancestor tools', () => {
   let released = 0;
-  const collision = new Error('scope-local fork is not restrictable');
-  assert.throws(() => installRootRouting({ ctx: { tools: {
-    register: () => () => released++, get: () => ({}), restrict: () => { throw collision; },
-  } } }, { name: 'subagent' }), error => error === collision);
+  const error = new Error('scope collision');
+  assert.throws(() => installRootRouting({ ctx: { tools: { register: () => () => released++, get: () => ({}), restrict: () => { throw error; } } } },
+    { name: 'subagent' }), caught => caught === error);
   assert.equal(released, 1);
-});
-
-test('host depth cap and native rejection are preserved; cwd stays in request', async () => {
-  for (const cap of [undefined, 0, 3]) {
-    const ctx = baseContext();
-    ctx.subagents.resolveMaxDepth = () => cap;
-    ctx.subagents.startActivation = async spec => {
-      assert.equal(spec.request.cwd, '/workspace/child');
-      assert.equal(Object.hasOwn(spec.request, 'maxDepth'), cap !== undefined);
-      assert.equal(spec.request.maxDepth, cap);
-      if (cap === 0) throw Object.assign(new Error('Maximum subagent depth reached'), { code: 'MAX_DEPTH' });
-      return { childId: spec.childId };
-    };
-    const pending = new Map();
-    const run = () => spawnProfiled({ ctx, agent, args: { profile: 'explorer', prompt: 'work', cwd: '/workspace/child' }, load, pending, signal });
-    if (cap === 0) await assert.rejects(run, error => error.code === 'SPAWN_FAILED' && /MAX_DEPTH/.test(error.message));
-    else assert.equal((await run()).kind, 'activation');
-    assert.equal(pending.size, 0);
-  }
 });

@@ -8,34 +8,33 @@ export interface Profile {
  readonly developer_instruction?: string
  readonly tool_whitelist?: readonly string[]
  readonly tool_blacklist?: readonly string[]
- readonly skill_whitelist?: readonly string[]
- readonly skill_blacklist?: readonly string[]
 }
-export interface Catalog { profiles: Map<string, Profile>; diagnostics: Map<string, ProfileError> }
-export type LoadProfiles = () => Catalog
-export type PendingProfiles = Map<string, Profile>
+export type ProfilePolicy = Pick<Profile, 'name' | 'developer_instruction' | 'tool_whitelist' | 'tool_blacklist'>
+export interface ProfileSummary { readonly name: string; readonly description?: string }
+export interface Catalog<P = Profile> { profiles: Map<string, P>; diagnostics: Map<string, ProfileError> }
+export type ReadProfile = (name: string) => Profile
 export function errorDetails(error: unknown): { code?: string; message: string } {
  const value = error as { code?: unknown; message?: unknown } | null | undefined
  return { ...(typeof value?.code === 'string' ? { code: value.code } : {}), message: typeof value?.message === 'string' ? value.message : String(error) }
 }
-import { createHash } from 'node:crypto';
 
 export const PROFILE_NAME = /^[a-z][a-z0-9_-]{0,63}$/;
 export const PROFILE_FIELDS = new Set([
   'provider', 'model', 'reasoning_effort',
-  'tool_whitelist', 'tool_blacklist', 'skill_whitelist', 'skill_blacklist',
+  'tool_whitelist', 'tool_blacklist',
   'description', 'developer_instruction',
 ]);
 const REQUIRED = ['provider', 'model', 'reasoning_effort'] as const;
-const LISTS = ['tool_whitelist', 'tool_blacklist', 'skill_whitelist', 'skill_blacklist'] as const;
+const LISTS = ['tool_whitelist', 'tool_blacklist'] as const;
 const PROTECTED_TOOLS = ['send_message', 'structured_output'];
 
-function assertProtectedToolBlacklist(profile: Profile) {
+function assertProtectedToolBlacklist(profile: ProfilePolicy) {
   const blocked = profile.tool_blacklist?.filter(name => PROTECTED_TOOLS.includes(name)) ?? [];
   if (blocked.length) throw new ProfileError('PROTECTED_TOOL_BLACKLIST',
     `profile "${profile.name}" cannot blacklist protected tools: ${blocked.join(', ')}`);
 }
-const LABEL_RE = /^\[dsh-profile:([a-z][a-z0-9_-]{0,63}):([a-f0-9]{16})\](?:\s|$)/;
+// Recognize old labels for identification only; never compare their obsolete hash.
+const LABEL_RE = /^\[dsh-profile:([a-z][a-z0-9_-]{0,63})(?::[a-f0-9]{16})?\](?:\s|$)/;
 
 export class ProfileError extends Error {
   readonly code: string;
@@ -90,34 +89,21 @@ export function validateProfile(name: string, value: unknown) {
     if (v !== undefined) profile[field] = v;
   }
   assertProtectedToolBlacklist(profile);
-  // No partial enforcement: the Skill registry currently has no agent-scoped allow/deny API.
-  for (const field of ['skill_whitelist', 'skill_blacklist'] as const) {
-    if (profile[field]?.length) throw new ProfileError('UNSUPPORTED_SKILL_FILTER',
-      `profile "${name}" sets "${field}", which cannot be enforced by the current DSH Skill API`);
-  }
   return Object.freeze(profile);
-}
-
-export function profileFingerprint(profile: Profile) {
-  const object: Record<string, unknown> = {};
-  for (const key of ['name', ...PROFILE_FIELDS] as (keyof Profile)[]) {
-    if (Object.hasOwn(profile, key)) object[key] = profile[key];
-  }
-  return createHash('sha256').update(JSON.stringify(object)).digest('hex').slice(0, 16);
 }
 
 export function profileLabel(profile: Profile, description: unknown) {
   const title = typeof description === 'string' && description.trim() ? description.trim() : 'Delegated task';
-  return `[dsh-profile:${profile.name}:${profileFingerprint(profile)}] ${title.slice(0, 120)}`;
+  return `[dsh-profile:${profile.name}] ${title.slice(0, 120)}`;
 }
 
 export function parseProfileLabel(label: unknown) {
   if (typeof label !== 'string') return undefined;
   const m = LABEL_RE.exec(label);
-  return m ? { name: m[1], fingerprint: m[2] } : undefined;
+  return m ? { name: m[1] } : undefined;
 }
 
-export function assertToolNames(profile: Profile, names: readonly string[]) {
+export function assertToolNames(profile: ProfilePolicy, names: readonly string[]) {
   assertProtectedToolBlacklist(profile);
   const known = new Set(names);
   if (!known.has('send_message')) throw new ProfileError('REQUIRED_TOOL_UNAVAILABLE',

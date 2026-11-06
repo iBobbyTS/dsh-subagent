@@ -12,6 +12,6 @@ Add optional named Profile selection for Fork only when official DSH supports a 
 
 ## Historical v0.1.0 baseline
 
-The original v0.1.0 baseline left `subagent_fork` untouched. The current implementation hides the root Agent's inherited fork entry while Profile-aware fork routing remains deferred; messaging and other control tools remain native. See [current scope and lifecycle](../profiles.md#scope-and-lifecycle).
+The original v0.1.0 baseline left `subagent_fork` untouched. The current implementation hides the root Agent's inherited fork entry while Profile-aware fork routing remains deferred; messaging and other control tools remain native. See [current scope and lifecycle](../profiles.md#scope).
 
 Relevant DSH sources: `packages/subagent/subagent-fork-in-process/src/index.ts`, `packages/subagent/tool-subagent/src/preset-selection.ts`.

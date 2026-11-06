@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  validateProfile, profileFingerprint, profileLabel, parseProfileLabel, ProfileError, assertToolNames,
+  validateProfile, profileLabel, parseProfileLabel, ProfileError, assertToolNames,
   assertModelRoute,
 } from '../lib/profile-core.js';
 
@@ -31,10 +31,10 @@ test('rejects unsupported TOML fields, wrong field types and invalid names', () 
   rejectsCode(() => validateProfile('explorer', { ...valid, tool_whitelist: ['read', 'read'] }), 'INVALID_FIELD_VALUE');
 });
 
-test('nonempty skill policies fail closed; empty arrays remain parseable', () => {
-  rejectsCode(() => validateProfile('explorer', { ...valid, skill_blacklist: ['dangerous'] }), 'UNSUPPORTED_SKILL_FILTER');
-  const p = validateProfile('explorer', { ...valid, skill_whitelist: [], skill_blacklist: [] });
-  assert.deepEqual(p.skill_blacklist, []);
+test('Skill filters are not part of the supported profile schema', () => {
+  for (const field of ['skill_blacklist', 'skill_whitelist']) {
+    for (const value of [[], ['example']]) rejectsCode(() => validateProfile('explorer', { ...valid, [field]: value }), 'UNSUPPORTED_FIELD');
+  }
 });
 
 test('tool names are validated without inventing tools', () => {
@@ -67,15 +67,15 @@ test('structured output whitelist is optional runtime-owned capability, not an u
   rejectsCode(() => assertToolNames(validateProfile('typo', { ...valid, tool_whitelist: ['structured_ouput'] }), ['send_message']), 'TOOL_NOT_FOUND');
 });
 
-test('profile label permits resume, is stable and does not leak developer instruction', () => {
+test('profile label retains only its name, regardless of configuration changes', () => {
   const p = profile();
   const label = profileLabel(p, 'Inspect login');
-  assert.deepEqual(parseProfileLabel(label), { name: 'explorer', fingerprint: profileFingerprint(p) });
+  assert.equal(label, '[dsh-profile:explorer] Inspect login');
+  assert.deepEqual(parseProfileLabel(label), { name: 'explorer' });
   assert.equal(label.includes('Only explore'), false);
   assert.equal(parseProfileLabel('Not our child'), undefined);
-  assert.notEqual(profileFingerprint(p), profileFingerprint(validateProfile('explorer', {
-    ...valid, developer_instruction: 'Changed',
-  })));
+  assert.equal(profileLabel(validateProfile('explorer', { ...valid, developer_instruction: 'Changed' }), 'Inspect login'), label);
+  assert.deepEqual(parseProfileLabel('[dsh-profile:explorer:0123456789abcdef] Old'), { name: 'explorer' });
 });
 
 test('provider not registered gets its own error code', async () => {
