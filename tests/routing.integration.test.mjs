@@ -54,9 +54,9 @@ test('Host plugin shadows real source delegation definitions without rewriting p
     getProvider(name) { return name === 'spawn' ? backend : { ...backend, name: 'fork', inheritsParentContext: true }; }
     resolveMaxDepth() { return 2; }
     async startActivation(spec) {
-      assert.equal(spec.request, undefined);
-      assert.ok(spec.parent);
-      assert.equal(spec.maxDepth, 2);
+      assert.ok(spec.request);
+      assert.ok(spec.request.parent);
+      assert.equal(spec.request.maxDepth, 2);
       accepted = spec;
       return { childId: spec.childId };
     }
@@ -136,8 +136,8 @@ test('Host plugin shadows real source delegation definitions without rewriting p
           agent: existing, signal: new AbortController().signal });
         assert.equal(result.isError, false, JSON.stringify(result));
         assert.equal(result.value.subagentId, accepted.childId);
-        assert.equal(accepted.agentOptions.model, 'fixture');
-        assert.equal(accepted.cwd, '/workspace/child');
+        assert.equal(accepted.request.agentOptions.model, 'fixture');
+        assert.equal(accepted.request.cwd, '/workspace/child');
         assert.match(accepted.label, /^\[dsh-profile:reader:/);
         // A descriptor-bearing child uses the same shared preset, not the root's
         // local fork mask. Profile policy still protects its communication tool.

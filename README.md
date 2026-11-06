@@ -110,3 +110,7 @@ npm pack --dry-run
 ```
 
 This project retains the original MIT license and copyright attribution. The previous `dsh-subagent` UI and per-profile `subagent_<name>` tools were removed intentionally; users must migrate their profile settings to TOML.
+
+## DSH 0.2.2-rc.1
+
+Activation task options use the release API’s `request` object. Validate against the matching release source with `DSH_TEST_SOURCE_ROOT`; newer master may use a different shape.

@@ -24,6 +24,6 @@ Without `DSH_TEST_SOURCE_ROOT`, the source integration suites explicitly skip; o
 
 The integration suites exercise current source Cordis, scope inheritance, native delegation-tool registration, native tool execution, real prompt assembly, plugin unload/re-enable, delayed fork masking, preserved persona and neighboring tools, protected messaging, and native on-demand structured capture. Agent/provider/model fixtures are explicit: these tests do not by themselves establish real model-backed child completion or current Desktop/Web deployment. Add a real activation test when changing lifecycle behavior; do not claim paid model or live GUI validation from fixture success.
 
-Package tests assert the bundle contains only the Host insertion. Installation order must never change a persona or mode's config. The activation request uses current top-level options and forwards the native Host depth cap. Validate both default and provider-managed cap behavior, failures, and cleanup.
+Package tests assert the bundle contains only the Host insertion. Installation order must never change a persona or mode's config. For DSH 0.2.2-rc.1, activation task options belong in `request`; the native Host depth cap is forwarded there. Validate both default and provider-managed cap behavior, failures, and cleanup.
 
 The repository's GitHub Issues feature was disabled when the v0.1.0 backlog was recorded; see [issue drafts](docs/issues/fork-profiles.md) for future fork work.

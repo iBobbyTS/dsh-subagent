@@ -57,13 +57,13 @@ test('spawn uses exact fixed route and official activation; preserves pending ch
   assert.equal(result.subagentId, seen.childId);
   assert.equal(seen.provider, 'spawn');
   assert.equal(seen.delivery, 'parent');
-  assert.equal(seen.request, undefined, 'current DSH activation options must be top-level');
-  assert.equal(seen.parent, agent);
-  assert.equal(seen.maxDepth, 2);
-  assert.equal(seen.agentOptions.provider, 'openai-codex');
-  assert.equal(seen.agentOptions.model, 'gpt-6-luna');
-  assert.equal(seen.agentOptions.reasoningEffort, 'xhigh');
-  assert.equal(seen.prompt[0].text, 'Trace auth functions');
+  assert.equal(seen.parent, undefined, 'task options belong to request on rc.1');
+  assert.equal(seen.request.parent, agent);
+  assert.equal(seen.request.maxDepth, 2);
+  assert.equal(seen.request.agentOptions.provider, 'openai-codex');
+  assert.equal(seen.request.agentOptions.model, 'gpt-6-luna');
+  assert.equal(seen.request.agentOptions.reasoningEffort, 'xhigh');
+  assert.equal(seen.request.prompt[0].text, 'Trace auth functions');
   assert.equal(pending.size, 0);
 });
 
@@ -205,14 +205,14 @@ test('failed root restriction rolls back registration without removing another o
   assert.equal(released, 1);
 });
 
-test('host depth cap and native rejection are preserved; cwd stays top-level', async () => {
+test('host depth cap and native rejection are preserved; cwd stays in request', async () => {
   for (const cap of [undefined, 0, 3]) {
     const ctx = baseContext();
     ctx.subagents.resolveMaxDepth = () => cap;
     ctx.subagents.startActivation = async spec => {
-      assert.equal(spec.cwd, '/workspace/child');
-      assert.equal(Object.hasOwn(spec, 'maxDepth'), cap !== undefined);
-      assert.equal(spec.maxDepth, cap);
+      assert.equal(spec.request.cwd, '/workspace/child');
+      assert.equal(Object.hasOwn(spec.request, 'maxDepth'), cap !== undefined);
+      assert.equal(spec.request.maxDepth, cap);
       if (cap === 0) throw Object.assign(new Error('Maximum subagent depth reached'), { code: 'MAX_DEPTH' });
       return { childId: spec.childId };
     };
