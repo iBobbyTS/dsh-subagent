@@ -9,31 +9,70 @@
     "url": "git+https://github.com/iBobbyTS/dsh-subagent.git"
   },
   "homepage": "https://github.com/iBobbyTS/dsh-subagent",
-  "bugs": { "url": "https://github.com/iBobbyTS/dsh-subagent/issues" },
-  "engines": { "node": ">=24.9.0", "dsh": ">=0.2.2-alpha.3 <0.3.0" },
-  "main": "./index.js",
+  "bugs": {
+    "url": "https://github.com/iBobbyTS/dsh-subagent/issues"
+  },
+  "engines": {
+    "node": ">=24.9.0",
+    "dsh": ">=0.2.2-alpha.3 <0.3.0"
+  },
+  "main": "./lib/index.js",
   "exports": {
-    ".": "./index.js",
+    ".": "./lib/index.js",
     "./package.json": "./package.json",
     "./locale/*.json": "./locale/*.json",
     "./icon": "./icon.svg"
   },
   "files": [
-    "index.js", "profile-core.js", "profile-runtime.js", "profile-store.js",
-    "cordis.patch.yml", "README.md", "README.zh.md", "docs", "CONTRIBUTING.md", "LICENSE",
-    "locale/en.json", "locale/zh.json", "icon.svg"
+    "lib",
+    "cordis.patch.yml",
+    "README.md",
+    "README.zh.md",
+    "docs",
+    "CONTRIBUTING.md",
+    "LICENSE",
+    "locale/en.json",
+    "locale/zh.json",
+    "icon.svg",
+    "src"
   ],
-  "dsh": { "bundle": { "patch": "./cordis.patch.yml" } },
-  "dependencies": { "@iarna/toml": "^2.2.5" },
-  "devDependencies": { "yaml": "^2.8.1", "typescript": "^6.0.3", "rrule": "2.8.1" },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "dependencies": {
+    "@iarna/toml": "^2.2.5"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "4.1.0",
+    "@deepseek-ai/dsh-agent": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-home-paths": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-llm": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-session": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-subagent": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-tools": "0.2.2-rc.1",
+    "@js-temporal/polyfill": "0.5.1",
+    "@types/iarna__toml": "2.0.5",
+    "@types/node": "22.20.5",
+    "rrule": "2.8.1",
+    "tsdown": "0.22.14",
+    "typescript": "5.9.3",
+    "yaml": "2.8.1",
+    "zod": "4.4.3"
+  },
   "peerDependencies": {
     "@deepseek-ai/cordis": ">=4.0.6-alpha.2 <5",
-    "@deepseek-ai/dsh-tools": ">=0.2.2-alpha.3 <0.3.0",
+    "@deepseek-ai/dsh-home-paths": ">=0.2.2-alpha.3 <0.3.0",
     "@deepseek-ai/dsh-subagent": ">=0.2.2-alpha.3 <0.3.0",
-    "@deepseek-ai/dsh-home-paths": ">=0.2.2-alpha.3 <0.3.0"
+    "@deepseek-ai/dsh-tools": ">=0.2.2-alpha.3 <0.3.0"
   },
   "scripts": {
-    "test": "node --test tests/*.test.mjs",
-    "check": "node --check index.js && node --check profile-core.js && node --check profile-store.js && node --check profile-runtime.js && npm test"
-  }
+    "test": "node scripts/check.mjs test",
+    "check": "node scripts/check.mjs all",
+    "typecheck": "tsc -p tsconfig.host.json",
+    "build:runtime": "node scripts/build-runtime.mjs",
+    "check:dist": "node scripts/check.mjs dist"
+  },
+  "packageManager": "pnpm@10.28.2"
 }

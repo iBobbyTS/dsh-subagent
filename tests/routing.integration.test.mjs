@@ -16,8 +16,8 @@ test('Host plugin shadows real source delegation definitions without rewriting p
   const native = await runtime.load('@deepseek-ai/dsh-tool-subagent');
   const { createScope, scopeTarget } = await runtime.load('@deepseek-ai/dsh-scope');
   const { executeModelToolFixture } = await runtime.load('@deepseek-ai/dsh-tool-testkit');
-  const plugin = await import('../index.js');
-  const { profileLabel, validateProfile } = await import('../profile-core.js');
+  const plugin = await import('../lib/index.js');
+  const { profileLabel, validateProfile } = await import('../lib/profile-core.js');
   const tmp = fileURLToPath(new URL('../.agent-work/tmp/native-shadowing/', import.meta.url));
   mkdirSync(tmp, { recursive: true });
   const home = mkdtempSync(join(tmp, 'runtime-'));
@@ -90,7 +90,7 @@ test('Host plugin shadows real source delegation definitions without rewriting p
       return value;
     }
     await t.test('late inherited fork is masked without touching another Agent', async () => {
-      const { installRootRouting } = await import('../profile-runtime.js');
+      const { installRootRouting } = await import('../lib/profile-runtime.js');
       const minimalKey = {};
       const minimal = createScope(host, minimalKey);
       scopes.push(minimal);

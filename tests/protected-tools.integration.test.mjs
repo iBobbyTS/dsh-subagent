@@ -2,9 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { scanProfiles } from '../profile-store.js';
-import { validateProfile } from '../profile-core.js';
-import { installChildPolicy } from '../profile-runtime.js';
+import { scanProfiles } from '../lib/profile-store.js';
+import { validateProfile } from '../lib/profile-core.js';
+import { installChildPolicy } from '../lib/profile-runtime.js';
 import { sourceRuntime } from './source-runtime.mjs';
 
 const root = process.env.DSH_TEST_SOURCE_ROOT;
@@ -17,7 +17,7 @@ test('current source preserves protected tools, catalog diagnostics and native s
   const { createScope } = await runtime.load('@deepseek-ai/dsh-scope');
   const { executeModelToolFixture } = await runtime.load('@deepseek-ai/dsh-tool-testkit');
   const { attachStructuredRuntime } = await runtime.file('packages/subagent/subagent/src/structured.ts');
-  const catalog = await import('../index.js');
+  const catalog = await import('../lib/index.js');
   const ctx = new Context();
   try {
     await ctx.plugin(Prompt);

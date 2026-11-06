@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   validateProfile, profileFingerprint, profileLabel, parseProfileLabel, ProfileError, assertToolNames,
   assertModelRoute,
-} from '../profile-core.js';
+} from '../lib/profile-core.js';
 
 const valid = {
   provider: 'openai-codex', model: 'gpt-6-luna', reasoning_effort: 'xhigh',

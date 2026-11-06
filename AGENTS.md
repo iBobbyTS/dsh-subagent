@@ -8,3 +8,5 @@ Provide named TOML profiles through the native `subagent` entry. DSH owns provid
 - Recover a child's own profile identity rather than an inherited ancestor descriptor. Preserve the stored profile policy when resuming.
 - Keep both README languages and delivered references aligned. Do not commit credentials, user profiles, session data, dependency directories or temporary fixtures.
 - Follow [CONTRIBUTING](CONTRIBUTING.md) for checks. Lifecycle changes need an actual source-runtime activation check, including failure and cleanup; unit fixtures alone do not prove paid model completion or live Desktop behavior.
+
+共同构建与交付合同见[统一规范](../docs/plugin-development.md)；`src/` 是运行逻辑编辑源，`lib/` 由构建生成。具体维护命令由本项目开发文档拥有。

@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { validateProfile, ProfileError, parseProfileLabel, profileLabel } from '../profile-core.js';
-import { spawnProfiled, resolveChildProfile, installChildPolicy, installRootRouting, profileIdentityFromSession } from '../profile-runtime.js';
-import { scanProfiles } from '../profile-store.js';
+import { validateProfile, ProfileError, parseProfileLabel, profileLabel } from '../lib/profile-core.js';
+import { spawnProfiled, resolveChildProfile, installChildPolicy, installRootRouting, profileIdentityFromSession } from '../lib/profile-runtime.js';
+import { scanProfiles } from '../lib/profile-store.js';
 import { fileURLToPath } from 'node:url';
 
 const p = validateProfile('explorer', {
@@ -72,7 +72,7 @@ test('child descriptor permits cold resume and refuses drifted Profile', () => {
   const runtimeLabel = (() => {
     let stored;
     const pending = new Map();
-    return import('../profile-core.js').then(({ profileLabel }) => profileLabel(p, 'Inspect login'));
+    return import('../lib/profile-core.js').then(({ profileLabel }) => profileLabel(p, 'Inspect login'));
   })();
   return runtimeLabel.then(text => {
     assert.ok(text.startsWith(label));

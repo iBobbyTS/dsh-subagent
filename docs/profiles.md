@@ -10,7 +10,7 @@ Disabling/unloading the Host plugin removes its root registrations and restricti
 
 This works across presets with the required native services; no per-mode preset copy is needed. Presets without fork need no fork restriction. A third party registering `subagent` or `subagent_fork` in the same root Agent layer is a collision, not something this plugin silently overwrites.
 
-Because the package contains plain JavaScript and its manifest has **no `prepare` or build scripts**, installation from GitHub does not require permission for a package build script. NPM installs the regular TOML parsing dependency.
+The package ships prebuilt JavaScript and has no install-time compiler hooks. DSH/pnpm installs the regular TOML parsing dependency; maintainers regenerate runtime files explicitly with `pnpm build:runtime`.
 
 
 ## TOML configuration

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { sourceRuntime } from './source-runtime.mjs';
-import { spawnProfiled } from '../profile-runtime.js';
+import { spawnProfiled } from '../lib/profile-runtime.js';
 
 const root = process.env.DSH_TEST_SOURCE_ROOT;
 test('profiled spawn satisfies the actual release activation method', { skip: !root }, async () => {

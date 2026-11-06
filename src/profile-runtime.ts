@@ -1,14 +1,23 @@
+import type { ReasoningEffortId } from '@deepseek-ai/dsh-llm';
+import type { ToolDefinition } from '@deepseek-ai/dsh-tools';
+import type { Session, SessionId } from '@deepseek-ai/dsh-session';
+import type { Context } from '@deepseek-ai/cordis';
+import type { Agent } from '@deepseek-ai/dsh-agent';
+import type { Catalog, Profile, LoadProfiles, PendingProfiles } from './profile-core.js';
+import type {} from '@deepseek-ai/dsh-subagent';
+import type {} from '@deepseek-ai/dsh-tools';
+import { errorDetails } from './profile-core.js';
 import { randomUUID } from 'node:crypto';
 import {
   ProfileError, assertModelRoute, assertToolNames, parseProfileLabel, profileFingerprint, profileLabel,
 } from './profile-core.js';
 
-const rootsWithHiddenFork = new WeakSet();
+const rootsWithHiddenFork = new WeakSet<Agent>();
 
 /** Parent preflight must not mistake our root-only fork mask for a child policy.
  * The child still revalidates its actual inherited tools before its first turn.
  */
-export function parentToolNames(agent) {
+export function parentToolNames(agent: Agent) {
   const names = agent.ctx.tools.schemas(agent).map(tool => tool.name);
   if (rootsWithHiddenFork.has(agent) && !names.includes('subagent_fork')) names.push('subagent_fork');
   return names;
@@ -17,8 +26,8 @@ export function parentToolNames(agent) {
 /** Replace only a root Agent's inherited spawn entry and hide its inherited fork.
  * Every effect is reversible; a failed attach must not leave a partial router.
  */
-export function installRootRouting(agent, definition) {
-  const disposers = [];
+export function installRootRouting(agent: Agent, definition: ToolDefinition) {
+  const disposers: (() => void)[] = [];
   let disposed = false;
   let maskingFork = false;
   let forkMasked = false;
@@ -52,14 +61,14 @@ export function installRootRouting(agent, definition) {
 }
 
 /** Read official durable descriptor; no custom session-event types or lifecycle state. */
-export function profileIdentityFromSession(session) {
+export function profileIdentityFromSession(session: Session) {
   if (session?.header?.origin !== 'subagent' || typeof session.snapshotEvents !== 'function') return undefined;
   const event = session.snapshotEvents(session.inheritedEventCount ?? 0)
     .find(e => e?.type === 'subagent/descriptor');
-  return parseProfileLabel(event?.data?.label);
+  return parseProfileLabel((event?.data as { label?: unknown } | undefined)?.label);
 }
 
-export function installChildPolicy(agent, profile) {
+export function installChildPolicy(agent: Agent, profile: Profile) {
   const child = agent.ctx;
   // Recheck the child view: inherited restrictions must not silently remove
   // the native communication tool, even when this profile sets no filters.
@@ -75,7 +84,7 @@ export function installChildPolicy(agent, profile) {
       ...(profile.tool_whitelist === undefined ? {} : { allow: [...new Set([
         ...profile.tool_whitelist.filter(name => name !== 'structured_output'), 'send_message',
       ])] }),
-      ...(profile.tool_blacklist === undefined ? {} : { deny: profile.tool_blacklist }),
+      ...(profile.tool_blacklist === undefined ? {} : { deny: [...profile.tool_blacklist] }),
     });
   }
   if (profile.developer_instruction?.trim()) {
@@ -88,7 +97,7 @@ export function installChildPolicy(agent, profile) {
   }
 }
 
-export async function spawnProfiled({ ctx, agent, args, load, pending, signal }) {
+export async function spawnProfiled({ ctx, agent, args, load, pending, signal }: { ctx: Context; agent: Agent; args: { profile: string; prompt: string; description?: string; cwd?: string }; load: LoadProfiles; pending: PendingProfiles; signal: AbortSignal }) {
   if (typeof args.profile !== 'string' || !args.profile.trim()) {
     throw new ProfileError('PROFILE_REQUIRED', 'subagent(profile, prompt) requires a nonempty profile');
   }
@@ -110,7 +119,7 @@ export async function spawnProfiled({ ctx, agent, args, load, pending, signal })
   }
   signal?.throwIfAborted();
   const maxDepth = ctx.subagents.resolveMaxDepth();
-  const childId = randomUUID();
+  const childId = randomUUID() as SessionId;
   const label = profileLabel(profile, args.description || args.prompt.slice(0, 75));
   pending.set(childId, profile);
   try {
@@ -126,24 +135,24 @@ export async function spawnProfiled({ ctx, agent, args, load, pending, signal })
         agentOptions: {
           provider: profile.provider,
           model: profile.model,
-          reasoningEffort: profile.reasoning_effort,
+          reasoningEffort: profile.reasoning_effort as ReasoningEffortId,
         },
       },
       signal,
       delivery: 'parent',
     });
-    return { kind: 'activation', subagentId: String(started.childId) };
+    return { kind: 'activation' as const, subagentId: String(started.childId) };
   } catch (error) {
     if (error instanceof ProfileError) throw error;
     throw new ProfileError('SPAWN_FAILED',
-      `failed to spawn profile "${profile.name}": ${typeof error?.code === 'string' ? `[DSH:${error.code}] ` : ''}${error?.message ?? String(error)}`, { cause: error });
+      `failed to spawn profile "${profile.name}": ${typeof errorDetails(error).code === 'string' ? `[DSH:${errorDetails(error).code}] ` : ''}${errorDetails(error).message}`, { cause: error });
   } finally {
     pending.delete(childId);
   }
 }
 
 /** The profile fingerprint is persisted in the built-in descriptor label. */
-export function resolveChildProfile(session, pending, load) {
+export function resolveChildProfile(session: Session, pending: PendingProfiles, load: LoadProfiles) {
   const identity = profileIdentityFromSession(session);
   if (!identity) return undefined;
   const current = pending.get(session.header.id);

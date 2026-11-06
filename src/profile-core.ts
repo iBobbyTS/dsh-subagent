@@ -1,3 +1,23 @@
+import type { ReasoningEffortId, LlmCallConfig } from '@deepseek-ai/dsh-llm';
+export interface Profile {
+ readonly name: string
+ readonly provider: string
+ readonly model: string
+ readonly reasoning_effort: string
+ readonly description?: string
+ readonly developer_instruction?: string
+ readonly tool_whitelist?: readonly string[]
+ readonly tool_blacklist?: readonly string[]
+ readonly skill_whitelist?: readonly string[]
+ readonly skill_blacklist?: readonly string[]
+}
+export interface Catalog { profiles: Map<string, Profile>; diagnostics: Map<string, ProfileError> }
+export type LoadProfiles = () => Catalog
+export type PendingProfiles = Map<string, Profile>
+export function errorDetails(error: unknown): { code?: string; message: string } {
+ const value = error as { code?: unknown; message?: unknown } | null | undefined
+ return { ...(typeof value?.code === 'string' ? { code: value.code } : {}), message: typeof value?.message === 'string' ? value.message : String(error) }
+}
 import { createHash } from 'node:crypto';
 
 export const PROFILE_NAME = /^[a-z][a-z0-9_-]{0,63}$/;
@@ -6,11 +26,11 @@ export const PROFILE_FIELDS = new Set([
   'tool_whitelist', 'tool_blacklist', 'skill_whitelist', 'skill_blacklist',
   'description', 'developer_instruction',
 ]);
-const REQUIRED = ['provider', 'model', 'reasoning_effort'];
-const LISTS = ['tool_whitelist', 'tool_blacklist', 'skill_whitelist', 'skill_blacklist'];
+const REQUIRED = ['provider', 'model', 'reasoning_effort'] as const;
+const LISTS = ['tool_whitelist', 'tool_blacklist', 'skill_whitelist', 'skill_blacklist'] as const;
 const PROTECTED_TOOLS = ['send_message', 'structured_output'];
 
-function assertProtectedToolBlacklist(profile) {
+function assertProtectedToolBlacklist(profile: Profile) {
   const blocked = profile.tool_blacklist?.filter(name => PROTECTED_TOOLS.includes(name)) ?? [];
   if (blocked.length) throw new ProfileError('PROTECTED_TOOL_BLACKLIST',
     `profile "${profile.name}" cannot blacklist protected tools: ${blocked.join(', ')}`);
@@ -18,14 +38,15 @@ function assertProtectedToolBlacklist(profile) {
 const LABEL_RE = /^\[dsh-profile:([a-z][a-z0-9_-]{0,63}):([a-f0-9]{16})\](?:\s|$)/;
 
 export class ProfileError extends Error {
-  constructor(code, message, options = {}) {
+  readonly code: string;
+  constructor(code: string, message: string, options: ErrorOptions = {}) {
     super(`[${code}] ${message}`, options);
     this.name = 'SubagentProfileError';
     this.code = code;
   }
 }
 
-function assertText(value, field, name, { required = false } = {}) {
+function assertText(value: unknown, field: string, name: string, { required = false }: { required?: boolean } = {}) {
   if (value === undefined) {
     if (required) throw new ProfileError('MISSING_REQUIRED_FIELD', `profile "${name}" is missing "${field}"`);
     return undefined;
@@ -37,7 +58,7 @@ function assertText(value, field, name, { required = false } = {}) {
   return value;
 }
 
-function assertList(value, field, name) {
+function assertList(value: unknown, field: string, name: string) {
   if (value === undefined) return undefined;
   if (!Array.isArray(value) || value.some(item => typeof item !== 'string' || item.trim().length === 0)) {
     throw new ProfileError('INVALID_FIELD_TYPE', `profile "${name}" field "${field}" must be an array of nonempty strings`);
@@ -49,7 +70,7 @@ function assertList(value, field, name) {
 }
 
 /** Validate a parsed TOML top-level table. Unknown fields are never ignored. */
-export function validateProfile(name, value) {
+export function validateProfile(name: string, value: unknown) {
   if (!PROFILE_NAME.test(name)) throw new ProfileError('INVALID_PROFILE_NAME', `invalid profile name "${name}"`);
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
     throw new ProfileError('INVALID_TOML_ROOT', `profile "${name}" must be a TOML table`);
@@ -57,50 +78,51 @@ export function validateProfile(name, value) {
   for (const field of Object.keys(value)) {
     if (!PROFILE_FIELDS.has(field)) throw new ProfileError('UNSUPPORTED_FIELD', `profile "${name}" has unsupported field "${field}"`);
   }
-  const profile = { name };
-  for (const field of REQUIRED) profile[field] = assertText(value[field], field, name, { required: true });
-  for (const field of ['description', 'developer_instruction']) {
-    const v = assertText(value[field], field, name);
+  const input = value as Record<string, unknown>;
+  const profile: { -readonly [K in keyof Profile]: Profile[K] } = { name, provider: '', model: '', reasoning_effort: '' };
+  for (const field of REQUIRED) profile[field] = assertText(input[field], field, name, { required: true })!;
+  for (const field of ['description', 'developer_instruction'] as const) {
+    const v = assertText(input[field], field, name);
     if (v !== undefined) profile[field] = v;
   }
   for (const field of LISTS) {
-    const v = assertList(value[field], field, name);
+    const v = assertList(input[field], field, name);
     if (v !== undefined) profile[field] = v;
   }
   assertProtectedToolBlacklist(profile);
   // No partial enforcement: the Skill registry currently has no agent-scoped allow/deny API.
-  for (const field of ['skill_whitelist', 'skill_blacklist']) {
+  for (const field of ['skill_whitelist', 'skill_blacklist'] as const) {
     if (profile[field]?.length) throw new ProfileError('UNSUPPORTED_SKILL_FILTER',
       `profile "${name}" sets "${field}", which cannot be enforced by the current DSH Skill API`);
   }
   return Object.freeze(profile);
 }
 
-export function profileFingerprint(profile) {
-  const object = {};
-  for (const key of ['name', ...PROFILE_FIELDS]) {
+export function profileFingerprint(profile: Profile) {
+  const object: Record<string, unknown> = {};
+  for (const key of ['name', ...PROFILE_FIELDS] as (keyof Profile)[]) {
     if (Object.hasOwn(profile, key)) object[key] = profile[key];
   }
   return createHash('sha256').update(JSON.stringify(object)).digest('hex').slice(0, 16);
 }
 
-export function profileLabel(profile, description) {
+export function profileLabel(profile: Profile, description: unknown) {
   const title = typeof description === 'string' && description.trim() ? description.trim() : 'Delegated task';
   return `[dsh-profile:${profile.name}:${profileFingerprint(profile)}] ${title.slice(0, 120)}`;
 }
 
-export function parseProfileLabel(label) {
+export function parseProfileLabel(label: unknown) {
   if (typeof label !== 'string') return undefined;
   const m = LABEL_RE.exec(label);
   return m ? { name: m[1], fingerprint: m[2] } : undefined;
 }
 
-export function assertToolNames(profile, names) {
+export function assertToolNames(profile: Profile, names: readonly string[]) {
   assertProtectedToolBlacklist(profile);
   const known = new Set(names);
   if (!known.has('send_message')) throw new ProfileError('REQUIRED_TOOL_UNAVAILABLE',
     `profile "${profile.name}" requires the native send_message tool`);
-  for (const key of ['tool_whitelist', 'tool_blacklist']) {
+  for (const key of ['tool_whitelist', 'tool_blacklist'] as const) {
     if (profile[key] === undefined) continue;
     // Native structured_output is child-local and only exists for structured
     // tasks. Naming it in a whitelist neither requires nor injects it here.
@@ -112,7 +134,7 @@ export function assertToolNames(profile, names) {
 }
 
 /** Use the native DSH exact-model resolver, not the advisory model catalog as truth. */
-export async function assertModelRoute(llm, profile, signal) {
+export async function assertModelRoute(llm: ModelResolver | undefined, profile: Profile, signal?: AbortSignal) {
   if (llm === undefined || typeof llm.listProviders !== 'function' || typeof llm.resolveCallConfig !== 'function') {
     throw new ProfileError('LLM_UNAVAILABLE', 'DSH LLM service is not available');
   }
@@ -126,23 +148,28 @@ export async function assertModelRoute(llm, profile, signal) {
     await llm.resolveCallConfig({
       provider: profile.provider,
       model: profile.model,
-      reasoningEffort: profile.reasoning_effort,
+      reasoningEffort: profile.reasoning_effort as ReasoningEffortId,
     }, signal);
   } catch (error) {
-    if (error?.code === 'UNSUPPORTED_REASONING_EFFORT') {
+    if (errorDetails(error).code === 'UNSUPPORTED_REASONING_EFFORT') {
       throw new ProfileError('REASONING_EFFORT_UNAVAILABLE',
-        `profile "${profile.name}": ${error.message}`, { cause: error });
+        `profile "${profile.name}": ${errorDetails(error).message}`, { cause: error });
     }
-    if (error?.code === 'NO_ADAPTER') {
+    if (errorDetails(error).code === 'NO_ADAPTER') {
       throw new ProfileError('PROVIDER_NOT_FOUND',
         `profile "${profile.name}": provider "${profile.provider}" is no longer registered`, { cause: error });
     }
-    if (['UNKNOWN_MODEL', 'MODEL_NOT_FOUND', 'NO_MODEL', 'INVALID_MODEL'].includes(error?.code)) {
+    if (['UNKNOWN_MODEL', 'MODEL_NOT_FOUND', 'NO_MODEL', 'INVALID_MODEL'].includes(errorDetails(error).code ?? '')) {
       throw new ProfileError('MODEL_NOT_FOUND',
         `profile "${profile.name}": model "${profile.model}" is unavailable from provider "${profile.provider}"`, { cause: error });
     }
     throw new ProfileError('MODEL_UNVERIFIED',
-      `profile "${profile.name}": could not verify model "${profile.model}" on provider "${profile.provider}": ${error?.message ?? String(error)}`,
+      `profile "${profile.name}": could not verify model "${profile.model}" on provider "${profile.provider}": ${errorDetails(error).message}`,
       { cause: error });
   }
+}
+
+export interface ModelResolver {
+ listProviders(): { id: string }[]
+ resolveCallConfig(config: LlmCallConfig, signal?: AbortSignal): Promise<unknown>
 }

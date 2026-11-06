@@ -1,21 +1,23 @@
+import type { Catalog, Profile } from './profile-core.js';
+import { errorDetails } from './profile-core.js';
 import { readdirSync, lstatSync, readFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import toml from '@iarna/toml';
 import { PROFILE_NAME, ProfileError, validateProfile } from './profile-core.js';
 
-export function ensureProfileDirectory(directory) {
+export function ensureProfileDirectory(directory: string) {
   mkdirSync(directory, { recursive: true });
 }
 
 /** Read each file in isolation. One corrupt TOML never hides the other profiles. */
-export function scanProfiles(directory) {
-  const profiles = new Map();
-  const diagnostics = new Map();
+export function scanProfiles(directory: string): Catalog {
+  const profiles = new Map<string, Profile>();
+  const diagnostics = new Map<string, ProfileError>();
   let entries;
   try {
     entries = readdirSync(directory, { withFileTypes: true });
   } catch (error) {
-    throw new ProfileError('PROFILE_DIRECTORY_UNAVAILABLE', `cannot read profile directory ${directory}: ${error.message}`, { cause: error });
+    throw new ProfileError('PROFILE_DIRECTORY_UNAVAILABLE', `cannot read profile directory ${directory}: ${errorDetails(error).message}`, { cause: error });
   }
   for (const entry of entries) {
     if (!entry.name.endsWith('.toml')) continue;
@@ -33,11 +35,11 @@ export function scanProfiles(directory) {
       const source = readFileSync(path, 'utf8');
       let parsed;
       try { parsed = toml.parse(source); }
-      catch (error) { throw new ProfileError('TOML_PARSE_ERROR', `profile "${entry.name}": ${error.message}`, { cause: error }); }
+      catch (error) { throw new ProfileError('TOML_PARSE_ERROR', `profile "${entry.name}": ${errorDetails(error).message}`, { cause: error }); }
       profiles.set(name, validateProfile(name, parsed));
     } catch (error) {
       diagnostics.set(name, error instanceof ProfileError
-        ? error : new ProfileError('PROFILE_READ_ERROR', `profile "${entry.name}": ${error.message}`, { cause: error }));
+        ? error : new ProfileError('PROFILE_READ_ERROR', `profile "${entry.name}": ${errorDetails(error).message}`, { cause: error }));
     }
   }
   return { profiles, diagnostics };
