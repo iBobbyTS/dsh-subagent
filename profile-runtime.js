@@ -54,7 +54,8 @@ export function installRootRouting(agent, definition) {
 /** Read official durable descriptor; no custom session-event types or lifecycle state. */
 export function profileIdentityFromSession(session) {
   if (session?.header?.origin !== 'subagent' || typeof session.snapshotEvents !== 'function') return undefined;
-  const event = session.snapshotEvents().find(e => e?.type === 'subagent/descriptor');
+  const event = session.snapshotEvents(session.inheritedEventCount ?? 0)
+    .find(e => e?.type === 'subagent/descriptor');
   return parseProfileLabel(event?.data?.label);
 }
 

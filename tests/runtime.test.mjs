@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { validateProfile, ProfileError, parseProfileLabel } from '../profile-core.js';
+import { validateProfile, ProfileError, parseProfileLabel, profileLabel } from '../profile-core.js';
 import { spawnProfiled, resolveChildProfile, installChildPolicy, installRootRouting, profileIdentityFromSession } from '../profile-runtime.js';
 import { scanProfiles } from '../profile-store.js';
 import { fileURLToPath } from 'node:url';
@@ -88,6 +88,26 @@ test('child descriptor permits cold resume and refuses drifted Profile', () => {
       profiles: new Map([['explorer', changed]]), diagnostics: new Map(),
     })), error => error.code === 'PROFILE_CHANGED');
   });
+});
+
+test('fork identity excludes inherited descriptors and preserves its own descriptor', () => {
+  const own = validateProfile('own-role', { provider: p.provider, model: p.model, reasoning_effort: 'high' });
+  const inherited = { seq: 0, type: 'subagent/descriptor', data: { label: profileLabel(p, 'Ancestor') } };
+  const marker = { seq: 1, type: 'session/end-seed', data: { inherited: true } };
+  const events = [inherited, marker, { seq: 2, type: 'subagent/descriptor', data: { label: 'Native fork' } }];
+  const session = { header: { id: 'fork-child', origin: 'subagent', isSeeded: true }, inheritedEventCount: 1,
+    snapshotEvents: (from = 0) => events.slice(from) };
+  assert.equal(profileIdentityFromSession(session), undefined);
+  assert.equal(resolveChildProfile(session, new Map(), () => assert.fail('native fork must not reload ancestor profiles')), undefined);
+
+  events[2] = { seq: 2, type: 'subagent/descriptor', data: { label: profileLabel(own, 'Own identity') } };
+  const catalog = () => ({ profiles: new Map([[own.name, own]]), diagnostics: new Map() });
+  assert.equal(resolveChildProfile(session, new Map(), catalog), own, 'cold resume uses the own descriptor even when the ancestor profile is gone');
+  const pending = new Map([[session.header.id, own]]);
+  assert.equal(resolveChildProfile(session, pending, catalog), own, 'fresh creation keeps its pending own identity');
+
+  events.splice(2);
+  assert.equal(profileIdentityFromSession(session), undefined, 'an inherited descriptor alone establishes no child profile');
 });
 
 test('child instructions are scoped to child, not the main-agent schema', () => {
