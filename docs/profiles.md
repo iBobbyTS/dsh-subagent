@@ -19,14 +19,16 @@ reasoning_effort = "high"
 description = "Read-only code exploration"
 developer_instruction = "Investigate the assigned code without modifying it."
 tool_whitelist = ["read", "glob", "grep"]
-# tool_blacklist = ["edit", "write"]
+# tool_blacklist = ["edit", "write", "mcp__playwright__*"]
 ~~~
 
 Only `provider`, `model` and `reasoning_effort` are required. Optional fields are `description`, `developer_instruction`, `tool_whitelist` and `tool_blacklist`. Unknown fields are rejected at spawn. Skill whitelist/blacklist fields are not currently implemented; support is planned once DSH provides a complete native Agent-scoped Skill policy API.
 
 `provider` is the LLM provider ID, not the transport backend `spawn`. `description` describes responsibilities to the main Agent. `developer_instruction` is applied only to the child as a persona prefix, not a distinct protocol-level developer message. It is not a secrecy boundary against an Agent that can read the TOML files.
 
-Both tool lists use exact native tool names. An empty whitelist retains protected inherited `send_message` and child-local runtime tools. `send_message` is always retained; blacklisting it or `structured_output` is rejected. Native structured output remains runtime-owned and injected only when a task requests it; naming it in a whitelist neither requires nor eagerly installs it. It is excluded from inherited-tool restrictions because native child-local tools are exempt. Profile spawn does not add an output-schema argument.
+Both tool lists accept native tool names and `*` patterns. `*` matches any run of characters, including none, in a whole case-sensitive tool name; no other character is special, and matching is anchored, so `mcp__playwright__*` selects that MCP namespace without listing every tool. Patterns match tool names only, never arguments, paths or result content. They expand against the tools present when the policy is applied (spawn and cold resume); a tool mounted later is covered only after that child is resumed.
+
+Concrete names must exist, and a whitelist pattern must select at least one tool, so concrete typos still fail. A blacklist pattern may select nothing: it guards a namespace that is not mounted, and a pattern can never grant access. A blacklist entry matching `send_message` or `structured_output` is rejected, including `*`, `send_*` and `structured_*`. An empty whitelist retains protected inherited `send_message` and child-local runtime tools. `send_message` is always retained. Native structured output remains runtime-owned and injected only when a task requests it; naming it in a whitelist neither requires nor eagerly installs it. It is excluded from inherited-tool restrictions because native child-local tools are exempt. Profile spawn does not add an output-schema argument.
 
 Tool restrictions are not filesystem/shell sandbox policies and cannot add tools absent from the native composition.
 

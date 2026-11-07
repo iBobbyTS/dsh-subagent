@@ -9,7 +9,9 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const mode = process.argv[2] ?? 'all'
 assert.ok(['all', 'test', 'dist'].includes(mode), 'expected all, test or dist')
 function run(command, args, cwd) {
- const manager = command === 'pnpm' && process.env.npm_execpath?.includes('pnpm') ? process.env.npm_execpath : undefined
+ // Reuse the invoking pnpm only when it is a JS entry; @pnpm/exe is a native binary.
+ const execpath = process.env.npm_execpath
+ const manager = command === 'pnpm' && /\.[cm]?js$/.test(execpath ?? '') ? execpath : undefined
  execFileSync(manager ? process.execPath : command, manager ? [manager, ...args] : args, { cwd, stdio: 'inherit' })
 }
 function files(dir) {

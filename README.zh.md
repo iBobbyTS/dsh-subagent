@@ -40,7 +40,7 @@ developer_instruction = "调查分配的代码，不修改文件。"
 
 Main 调用 `subagent` 时提供 `profile: "explorer"` 和自包含的 `prompt`。DSH 返回 activation ID，并以原生机制通知完成；后续通过 `send_message` 通信。
 
-根 Agent 的继承 `subagent_fork` 和 `list_subagent_models` 被隐藏，改用 `list_subagent_profiles` 查询当前名称与描述。初始目录只读取一次；每次 spawn 只重读选中的 TOML。待 DSH 提供完整原生作用域接口后再支持 Skill 黑白名单。工具过滤不是文件系统沙箱。
+根 Agent 的继承 `subagent_fork` 和 `list_subagent_models` 被隐藏，改用 `list_subagent_profiles` 查询当前名称与描述。初始目录只读取一次；每次 spawn 只重读选中的 TOML。待 DSH 提供完整原生作用域接口后再支持 Skill 黑白名单。工具黑白名单支持 `*` 通配，例如 `mcp__playwright__*`。工具过滤不是文件系统沙箱。
 
 标识只保留 Profile 名称，不保留指纹。原生 Host 存储保存子 Agent 创建时的 persona／工具策略；继续旧会话不重新校验当前 TOML。插件快照连续 30 天无活动后过期；清理保护存活、初始化中的子 Agent 和离线待处理消息，不删除原生历史或 Profile 文件。快照过期后拒绝冷恢复，避免工具限制丢失。Host 需要提供持久化的 `storageDomain`。深度设置、迁移限制与错误见 [Profile 参考](docs/profiles.md)。
 

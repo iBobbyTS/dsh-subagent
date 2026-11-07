@@ -28,8 +28,18 @@ const REQUIRED = ['provider', 'model', 'reasoning_effort'] as const;
 const LISTS = ['tool_whitelist', 'tool_blacklist'] as const;
 const PROTECTED_TOOLS = ['send_message', 'structured_output'];
 
+/** Only `*` is special: it matches any run of characters in a whole tool name, including none. */
+function toolPattern(entry: string) {
+  const source = entry.split('*').map(part => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.*');
+  return new RegExp('^' + source + '$');
+}
+export function isToolPattern(entry: string) { return entry.includes('*'); }
+function matchesTool(entry: string, name: string) {
+  return isToolPattern(entry) ? toolPattern(entry).test(name) : entry === name;
+}
+
 function assertProtectedToolBlacklist(profile: ProfilePolicy) {
-  const blocked = profile.tool_blacklist?.filter(name => PROTECTED_TOOLS.includes(name)) ?? [];
+  const blocked = (profile.tool_blacklist ?? []).filter(entry => PROTECTED_TOOLS.some(tool => matchesTool(entry, tool)));
   if (blocked.length) throw new ProfileError('PROTECTED_TOOL_BLACKLIST',
     `profile "${profile.name}" cannot blacklist protected tools: ${blocked.join(', ')}`);
 }
@@ -109,14 +119,42 @@ export function assertToolNames(profile: ProfilePolicy, names: readonly string[]
   if (!known.has('send_message')) throw new ProfileError('REQUIRED_TOOL_UNAVAILABLE',
     `profile "${profile.name}" requires the native send_message tool`);
   for (const key of ['tool_whitelist', 'tool_blacklist'] as const) {
-    if (profile[key] === undefined) continue;
+    const entries = profile[key];
+    if (entries === undefined) continue;
     // Native structured_output is child-local and only exists for structured
-    // tasks. Naming it in a whitelist neither requires nor injects it here.
-    const missing = profile[key].filter(name => !known.has(name)
-      && !(key === 'tool_whitelist' && name === 'structured_output'));
+    // tasks. Naming or matching it in a whitelist neither requires nor injects it.
+    const candidates = key === 'tool_whitelist' ? [...known, 'structured_output'] : [...known];
+    const missing = entries.filter(entry => {
+      if (!isToolPattern(entry)) return !candidates.includes(entry);
+      // A blacklist pattern guards a whole namespace, which may currently hold no tool.
+      if (key === 'tool_blacklist') return false;
+      return !candidates.some(name => matchesTool(entry, name));
+    });
     if (missing.length) throw new ProfileError('TOOL_NOT_FOUND',
       `profile "${profile.name}" has unknown ${key} entries: ${missing.map(x => JSON.stringify(x)).join(', ')}`);
   }
+}
+
+export interface ToolFilter { allow?: string[]; deny?: string[] }
+
+/** Expand both lists into exact native names; callers validate them first. */
+export function resolveToolFilter(profile: ProfilePolicy, names: readonly string[]): ToolFilter {
+  const expand = (entries: readonly string[]) => {
+    const matched = new Set<string>();
+    for (const entry of entries) {
+      if (!isToolPattern(entry)) { matched.add(entry); continue; }
+      const pattern = toolPattern(entry);
+      for (const name of names) if (pattern.test(name)) matched.add(name);
+    }
+    return [...matched].sort();
+  };
+  const filter: ToolFilter = {};
+  if (profile.tool_whitelist !== undefined) {
+    // Scope-local structured output never enters an inherited-tool restriction.
+    filter.allow = [...new Set([...expand(profile.tool_whitelist).filter(name => name !== 'structured_output'), 'send_message'])].sort();
+  }
+  if (profile.tool_blacklist !== undefined) filter.deny = expand(profile.tool_blacklist);
+  return filter;
 }
 
 /** Use the native DSH exact-model resolver, not the advisory model catalog as truth. */

@@ -40,7 +40,7 @@ developer_instruction = "Investigate the assigned code without modifying it."
 
 The main Agent calls `subagent` with `profile: "explorer"` and a self-contained `prompt`. DSH returns an activation ID and delivers completion through its native lifecycle; follow-up messages use `send_message`.
 
-The root Agent's inherited `subagent_fork` and `list_subagent_models` are hidden; use `list_subagent_profiles` for current names and descriptions. The initial catalog is read once; each spawn rereads only its selected TOML. Skill filters are planned once DSH provides a complete native scoped API. Tool filtering is a capability restriction, not a filesystem sandbox.
+The root Agent's inherited `subagent_fork` and `list_subagent_models` are hidden; use `list_subagent_profiles` for current names and descriptions. The initial catalog is read once; each spawn rereads only its selected TOML. Skill filters are planned once DSH provides a complete native scoped API. Tool lists accept `*` patterns such as `mcp__playwright__*`. Tool filtering is a capability restriction, not a filesystem sandbox.
 
 Labels retain only the Profile name, without fingerprints. Native Host storage retains each child's original persona/tool policy; continuation does not revalidate the current TOML. Plugin snapshots expire after 30 days without activity. Cleanup protects live/starting children and offline pending messages, and never deletes native history or Profile files. An expired snapshot prevents cold continuation rather than dropping restrictions. The Host needs `storageDomain` with a persistent backend. See the [profile reference](docs/profiles.md) for depth settings, migration limits and errors.
 

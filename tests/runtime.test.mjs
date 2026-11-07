@@ -90,7 +90,7 @@ test('child instructions are scoped to child, not the main-agent schema', () => 
   installChildPolicy(child, p);
   assert.equal(child.persona.name, 'deployment:persona-prefix');
   assert.equal(child.persona.text, p.developer_instruction);
-  assert.deepEqual(child.filter.allow, ['read', 'grep', 'send_message']);
+  assert.deepEqual(child.filter.allow, ['grep', 'read', 'send_message']);
   assert.deepEqual(p.tool_whitelist, ['read', 'grep'], 'effective protection must not mutate persisted profile identity');
 });
 
@@ -105,7 +105,7 @@ test('whitelist protection preserves messaging without registering structured ou
         register: () => assert.fail('the native runtime, not this policy, owns structured_output injection'),
       } } };
       installChildPolicy(child, profile);
-      assert.deepEqual(child.filter.allow, [...new Set([...tool_whitelist.filter(n => n !== 'structured_output'), 'send_message'])]);
+      assert.deepEqual(child.filter.allow, [...new Set([...tool_whitelist.filter(n => n !== 'structured_output'), 'send_message'])].sort());
       assert.equal(child.filter.allow.includes('structured_output'), false, 'scope-local tools must not enter inherited restrictions');
     }
   }

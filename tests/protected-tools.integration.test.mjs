@@ -26,11 +26,30 @@ test('current source preserves protected tools, catalog diagnostics and native s
     const owner = ctx.inject(['tools', 'systemPrompt'], () => {});
     await owner;
     const testCtx = owner.ctx;
-    for (const name of ['read', 'edit', 'send_message']) testCtx.tools.register(defineTool({
+    for (const name of ['read', 'edit', 'send_message', 'mcp__fixture__read', 'mcp__fixture__write', 'mcp__other__read']) testCtx.tools.register(defineTool({
       name, description: `Capability fixture ${name}`, parameters: {},
       output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] },
       execute: async () => name,
     }));
+    await t.test('wildcard tool filters expand at the native restriction boundary', async () => {
+      const cases = [
+        { name: 'wildcard-deny', fields: { tool_blacklist: ['mcp__fixture__*'] },
+          hidden: ['mcp__fixture__read', 'mcp__fixture__write'], shown: ['mcp__other__read', 'read', 'edit', 'send_message'] },
+        { name: 'wildcard-allow', fields: { tool_whitelist: ['mcp__fixture__*'] },
+          hidden: ['mcp__other__read', 'read', 'edit'], shown: ['mcp__fixture__read', 'mcp__fixture__write', 'send_message'] },
+      ];
+      for (const entry of cases) {
+        const child = { id: randomUUID() };
+        const scope = createScope(testCtx, child);
+        child.ctx = scope.ctx;
+        try {
+          installChildPolicy(child, validateProfile(entry.name, { provider: 'test', model: 'test',
+            reasoning_effort: 'high', ...entry.fields }));
+          for (const name of entry.hidden) assert.equal(testCtx.tools.get(name, child), undefined, name);
+          for (const name of entry.shown) assert.ok(testCtx.tools.get(name, child), name);
+        } finally { await scope.dispose(); }
+      }
+    });
     await t.test('discovery lists descriptions without enforcing spawn-time tool policies', async () => {
       const directory = fileURLToPath(new URL('./fixtures/protected-tools/', import.meta.url));
       const { listProfiles } = await import('../lib/profile-store.js');

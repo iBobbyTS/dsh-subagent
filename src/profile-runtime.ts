@@ -7,7 +7,7 @@ import type { Profile, ProfilePolicy, ReadProfile } from './profile-core.js';
 import type { PolicyStore } from './policy-store.js';
 import type {} from '@deepseek-ai/dsh-subagent';
 import { randomUUID } from 'node:crypto';
-import { ProfileError, assertModelRoute, assertToolNames, errorDetails, parseProfileLabel, profileLabel } from './profile-core.js';
+import { ProfileError, assertModelRoute, assertToolNames, errorDetails, parseProfileLabel, profileLabel, resolveToolFilter } from './profile-core.js';
 
 const hiddenTools = new WeakMap<Agent, Set<string>>();
 const POLICY_MARKER = Symbol.for('dsh-subagent.retained-policy.v1');
@@ -67,14 +67,10 @@ export function profilePolicy(profile: Profile): ProfilePolicy {
 
 export function installChildPolicy(agent: Agent, profile: ProfilePolicy) {
   const child = agent.ctx;
-  assertToolNames(profile, child.tools.schemas(agent).map(tool => tool.name));
+  const names = child.tools.schemas(agent).map(tool => tool.name);
+  assertToolNames(profile, names);
   if (profile.tool_whitelist !== undefined || profile.tool_blacklist !== undefined) {
-    child.tools.restrict({
-      ...(profile.tool_whitelist === undefined ? {} : { allow: [...new Set([
-        ...profile.tool_whitelist.filter(name => name !== 'structured_output'), 'send_message',
-      ])] }),
-      ...(profile.tool_blacklist === undefined ? {} : { deny: [...profile.tool_blacklist] }),
-    });
+    child.tools.restrict(resolveToolFilter(profile, names));
   }
   if (profile.developer_instruction?.trim()) child.systemPrompt.section({
     name: 'deployment:persona-prefix',
